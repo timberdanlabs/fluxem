@@ -44,4 +44,5 @@ data/*.db
 # Internal test suite & dev dependencies
 tests/
 requirements-dev.txt
+TECH_SPEC.md
 
