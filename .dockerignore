@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.coverage
+htmlcov
+.mypy_cache
+.ruff_cache
+tests
+docs
+*.md
+!fluxem/tech_spec.md
