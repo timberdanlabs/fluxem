@@ -45,7 +45,27 @@ Access the browser interface at **`http://<FLUXEM_IP>:8000/ui`**:
 
 ## 🚀 Quickstart
 
-### Running locally with Virtualenv
+### 🏠 Home Assistant Add-on (Recommended)
+1. In Home Assistant, navigate to **Settings ➔ Add-ons ➔ Add-on Store**.
+2. Click the **three dots** (top right) ➔ **Repositories**.
+3. Add repository URL: `https://github.com/timberdanlabs/fluxem`
+4. Click **Install** on **FluxEM**, then enable **Start on boot** and **Show in sidebar**.
+
+---
+
+### 🐳 Running with Docker (Pre-built image from GHCR)
+```bash
+docker run -d \
+  --name fluxem \
+  --restart unless-stopped \
+  -p 8000:8000 \
+  -v $(pwd)/data:/app/data \
+  ghcr.io/timberdanlabs/fluxem:latest
+```
+
+---
+
+### 🐍 Running locally with Virtualenv
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -53,12 +73,6 @@ pip install -r requirements.txt
 
 # Run the FastAPI service
 uvicorn fluxem.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### Running with Docker
-```bash
-docker build -t fluxem:latest .
-docker run -d --name fluxem --restart unless-stopped -p 8000:8000 -v $(pwd)/data:/app/data fluxem:latest
 ```
 
 ---

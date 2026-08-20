@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fluxem"
-version = "0.1.0"
+version = "0.1.1"
 description = "FluxEM: Custom Home Energy Optimization Engine for Home Assistant"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    { name = "FluxEM Team" }
+    { name = "Dan Timbers", email = "timberdanlabs@gmail.com" }
 ]
+urls = { "Homepage" = "https://github.com/timberdanlabs/fluxem", "Repository" = "https://github.com/timberdanlabs/fluxem" }
 dependencies = [
     "fastapi>=0.110.0,<1.0.0",
     "uvicorn[standard]>=0.28.0,<1.0.0",

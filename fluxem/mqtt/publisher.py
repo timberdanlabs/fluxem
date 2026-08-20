@@ -8,6 +8,7 @@ import logging
 from typing import Any, Dict, Optional, Tuple
 import paho.mqtt.client as mqtt
 
+from fluxem import __version__
 from fluxem.config import settings
 from fluxem.models.response import OptimizationScheduleResponse
 
@@ -272,8 +273,8 @@ class MQTTPublisher:
                 "identifiers": ["fluxem_energy_optimizer"],
                 "name": "FluxEM Energy Optimizer",
                 "manufacturer": "FluxEM",
-                "model": "v0.1.0",
-                "sw_version": "0.1.0",
+                "model": f"v{__version__}",
+                "sw_version": __version__,
             }
 
             # 1. Engine Status Sensor

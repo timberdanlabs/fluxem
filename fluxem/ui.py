@@ -5,6 +5,7 @@ Supports live autocomplete from connected Home Assistant entities and real-time 
 """
 
 from fastapi.responses import HTMLResponse
+from fluxem import __version__
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -57,7 +58,7 @@ HTML_TEMPLATE = """
         </div>
         <div>
           <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-            FluxEM <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">v0.1.0</span>
+            FluxEM <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">__FLUXEM_VERSION__</span>
           </h1>
           <p class="text-xs text-slate-400">Home Energy Optimization Engine</p>
         </div>
@@ -1276,5 +1277,7 @@ HTML_TEMPLATE = """
 
 
 def render_ui_html() -> HTMLResponse:
-    """Returns the standalone WebUI dashboard HTML."""
-    return HTMLResponse(content=HTML_TEMPLATE, status_code=200)
+    """Returns the standalone WebUI dashboard HTML with current version."""
+    content = HTML_TEMPLATE.replace("__FLUXEM_VERSION__", f"v{__version__}")
+    return HTMLResponse(content=content, status_code=200)
+
