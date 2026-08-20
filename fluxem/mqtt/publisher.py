@@ -247,7 +247,10 @@ class MQTTPublisher:
 
             # 6. Metadata and Watchdog Telemetry
             if "watchdog" in result.metadata:
-                self._publish(f"{p}/watchdog/decision", json.dumps(result.metadata["watchdog"]), retain=True)
+                wd = result.metadata["watchdog"]
+                self._publish(f"{p}/watchdog/decision", json.dumps(wd), retain=True)
+                reason_str = wd.get("reason", "Optimized") if isinstance(wd, dict) else "Optimized"
+                self._publish(f"{p}/watchdog/reason", str(reason_str)[:250], retain=True)
 
             # 7. Ensure Home Assistant Discovery is up to date
             self.publish_home_assistant_discovery(list(result.deferrable_load_power_w.keys()))
@@ -364,7 +367,21 @@ class MQTTPublisher:
                 retain=True,
             )
 
-            # 7. Deferrable load switches and power sensors
+            # 7. Watchdog Drift Reason Sensor
+            self._publish(
+                f"homeassistant/sensor/{p}/watchdog_reason/config",
+                json.dumps({
+                    "name": "FluxEM Watchdog Reason",
+                    "state_topic": f"{p}/watchdog/reason",
+                    "json_attributes_topic": f"{p}/watchdog/decision",
+                    "unique_id": f"{p}_watchdog_reason",
+                    "icon": "mdi:shield-sync",
+                    "device": device_info,
+                }),
+                retain=True,
+            )
+
+            # 8. Deferrable load switches and power sensors
             for load_id in deferrable_load_ids:
                 clean_name = load_id.replace("_", " ").title()
 

@@ -21,6 +21,7 @@ class TimeSeriesNormalizer:
         df: pd.DataFrame,
         target_timestep_minutes: Optional[int] = None,
         default_timestep_minutes: int = 30,
+        timezone_name: Optional[str] = None,
     ) -> Tuple[ProcessedTimeSeriesData, List[str]]:
         """
         Detects timestep, optionally resamples to uniform resolution,
@@ -59,7 +60,7 @@ class TimeSeriesNormalizer:
         processed_data = ProcessedTimeSeriesData(
             df=df,
             timestep_minutes=effective_timestep,
-            timezone_name="UTC",
+            timezone_name=timezone_name or "UTC",
         )
 
         return processed_data, warnings

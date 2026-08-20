@@ -1,10 +1,6 @@
-"""
-Persistent storage manager for FluxEM WebUI configuration.
-Saves and loads user-configured battery specs, deferrable loads, thresholds, and MQTT/HA settings.
-"""
-
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -14,7 +10,9 @@ from fluxem.models.loads import DeferrableLoad
 
 logger = logging.getLogger("fluxem.storage")
 
-DEFAULT_CONFIG_PATH = Path("data/config.json")
+DEFAULT_CONFIG_PATH = Path(os.environ.get("FLUXEM_CONFIG_PATH", os.environ.get("CONFIG_PATH", "data/config.json")))
+
+
 
 
 class AppConfigData(BaseModel):
@@ -134,8 +132,11 @@ class ConfigStore:
             return False
 
     def update_from_dict(self, data: Dict[str, Any]) -> AppConfigData:
-        """Validates and updates configuration from dictionary."""
-        validated = AppConfigData.model_validate(data)
+        """Validates and updates configuration from dictionary, merging with existing config."""
+        current_dict = self._config.model_dump()
+        for k, v in data.items():
+            current_dict[k] = v
+        validated = AppConfigData.model_validate(current_dict)
         self.save(validated)
         return self._config
 

@@ -459,13 +459,14 @@ class HomeAssistantClient:
         entity_id: str,
         ha_timezone: Optional[str] = None,
         now_utc: Optional[datetime] = None,
-    ) -> float:
+    ) -> Tuple[float, bool]:
         """
         Queries Home Assistant history for an appliance switch or power sensor since local midnight,
-        calculating the total operating hours accumulated today.
+        calculating total operating hours accumulated today and detecting if a heating/run cycle completed.
+        Returns: (accumulated_hours: float, is_cycle_completed: bool)
         """
         if not entity_id:
-            return 0.0
+            return 0.0, False
 
         tz = ZoneInfo("UTC")
         if ha_timezone and ha_timezone.lower() not in ("auto", "none", ""):
@@ -488,7 +489,7 @@ class HomeAssistantClient:
         # Fetch history records for the past 1 day
         history_records = await self.fetch_history(entity_id, days=1)
         if not history_records:
-            return 0.0
+            return 0.0, False
 
         parsed: List[Tuple[datetime, str]] = []
         for r in history_records:
@@ -500,11 +501,13 @@ class HomeAssistantClient:
                     parsed.append((dt, str(st)))
 
         if not parsed:
-            return 0.0
+            return 0.0, False
 
         parsed.sort(key=lambda x: x[0])
 
         total_active_seconds = 0.0
+        last_was_active = False
+
         for i in range(len(parsed)):
             dt_start, st = parsed[i]
             dt_end = parsed[i + 1][0] if i + 1 < len(parsed) else now_utc
@@ -518,20 +521,26 @@ class HomeAssistantClient:
                     is_active = True
                 else:
                     try:
-                        if float(st) > 10.0:
+                        if float(st) > 15.0:
                             is_active = True
                     except (ValueError, TypeError):
                         pass
 
                 if is_active:
                     total_active_seconds += (seg_end - seg_start).total_seconds()
+                    last_was_active = True
+                else:
+                    last_was_active = False
 
         accumulated_hours = round(total_active_seconds / 3600.0, 2)
+        # Cycle is completed if it accumulated at least 15 mins (0.25h) today and is currently idle
+        is_cycle_completed = bool(accumulated_hours >= 0.25 and not last_was_active)
+
         logger.info(
             f"Calculated {accumulated_hours:.2f}h accumulated runtime today for entity '{entity_id}' "
-            f"(since local midnight {local_midnight.strftime('%Y-%m-%d %H:%M %Z')})."
+            f"(since local midnight {local_midnight.strftime('%Y-%m-%d %H:%M %Z')}, cycle_completed: {is_cycle_completed})."
         )
-        return accumulated_hours
+        return accumulated_hours, is_cycle_completed
 
     def _extract_solar_intervals(
         self,
@@ -1140,13 +1149,21 @@ class HomeAssistantClient:
                 # Auto-calculate accumulated runtime today from history
                 hist_entity = power_entity or switch_entity
                 if hist_entity:
-                    accumulated = await self.calculate_load_accumulated_hours(
+                    accumulated, is_cycle_completed = await self.calculate_load_accumulated_hours(
                         hist_entity,
                         ha_timezone=resolved_tz,
                         now_utc=start_time,
                     )
                     if accumulated > 0.0:
                         load_copy.accumulated_hours_today = max(load_copy.accumulated_hours_today, accumulated)
+
+                    if load_copy.complete_on_cutoff and is_cycle_completed and not load_copy.is_running:
+                        load_copy.is_cycle_completed_today = True
+                        logger.info(
+                            f"Load '{load.name or load.id}' completed heating cycle today ({load_copy.accumulated_hours_today:.2f}h runtime, "
+                            f"thermostat cutoff detected). Daily requirement marked satisfied."
+                        )
+                    else:
                         logger.info(
                             f"Load '{load.name or load.id}' accumulated runtime today: {load_copy.accumulated_hours_today:.2f}h / "
                             f"{load_copy.required_hours or 0.0:.2f}h required (remaining: {load_copy.remaining_hours_needed:.2f}h)."
@@ -1193,6 +1210,7 @@ class HomeAssistantClient:
             deferrable_loads=updated_loads,
             prediction_horizon_days=horizon_days,
             load_history_days=load_history_days,
+            ha_timezone=resolved_tz,
             force_reoptimize=force_reoptimize,
         )
 

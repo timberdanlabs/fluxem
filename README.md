@@ -13,8 +13,10 @@ FluxEM is built with Python 3.12, FastAPI, Pandas, and NumPy:
   - Automatic frequency detection and alignment to uniform intervals (5, 15, 30, 60 minutes).
   - Robust data validation, NaN / missing value imputation, non-monotonic sorting, and unit conversion (W vs kW, $/kWh vs c/kWh).
   - **Zero-Helper Deferrable Load Deduction**: Automatically computes pure baseline home demand (`Baseline = house_power - sum(deferrable_power)`) so you don't need custom Home Assistant template sensors.
-- **Module B: Flexible Deferrable Load Management**:
-  - **Continuous Mode (`continuous: true`)**: Enforces strict unbroken runs for thermal loads (hot water, heat pumps) and preserves active mid-cycle states from step 0.
+- **Module B: Flexible & Critical Deferrable Load Management**:
+  - **Critical / Mandatory Mode (`critical: true`)**: Enforces daily completion for essential thermal/hygiene loads (hot water, heat pumps), scheduling within the lowest-cost window (importing from grid if needed).
+  - **Opportunistic / Non-Critical Mode (`critical: false`)**: Defers non-essential loads (pool pumps, EV charging) on high-price/low-solar days with configurable `max_skip_days`, `max_buy_price` ceilings, or `solar_only` restrictions.
+  - **Continuous Mode (`continuous: true`)**: Enforces strict unbroken runs for thermal loads and preserves active mid-cycle states from step 0.
   - **Flexible Mode (`continuous: false`)**: Optimizes split runs across cheap price dips and solar peaks while enforcing equipment cycle constraints (`max_starts_per_day`).
   - Priority-based solar stacking and time window boundaries (`window_start_time` / `window_end_time`).
 - **Module C: Intelligent Grid Pre-Charging & Dynamic Battery Arbitrage**:
@@ -34,7 +36,7 @@ FluxEM is built with Python 3.12, FastAPI, Pandas, and NumPy:
 ## 🎨 Interactive WebUI Dashboard
 
 Access the browser interface at **`http://<FLUXEM_IP>:8000/ui`**:
-- 🎛️ **Deferrable Loads Manager**: Add, edit, and delete appliances with continuous/flexible toggles.
+- 🎛️ **Deferrable Loads Manager**: Add, edit, and delete appliances with Critical/Opportunistic, Continuous/Flexible, and Solar-Only toggles.
 - 🔋 **Battery Storage Configuration**: Usable capacity, SOC limits, and efficiency rates.
 - 🏠 **Home Assistant API & Horizon**: Select **1, 2, or 3 Days** lookahead and **1 to 14 Days** history for home load forecasting.
 - 📈 **Dynamic Arbitrage**: Configure grid pre-charging and feed-in export trading.
@@ -54,13 +56,31 @@ Access the browser interface at **`http://<FLUXEM_IP>:8000/ui`**:
 ---
 
 ### 🐳 Running with Docker (Pre-built image from GHCR)
+
+#### Using Docker CLI
 ```bash
 docker run -d \
   --name fluxem \
   --restart unless-stopped \
   -p 8000:8000 \
-  -v $(pwd)/data:/app/data \
+  -v fluxem_data:/app/data \
   ghcr.io/timberdanlabs/fluxem:latest
+```
+
+#### Using Docker Compose (`docker-compose.yml`)
+```yaml
+services:
+  fluxem:
+    image: ghcr.io/timberdanlabs/fluxem:latest
+    container_name: fluxem
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - fluxem_data:/app/data
+
+volumes:
+  fluxem_data:
 ```
 
 ---

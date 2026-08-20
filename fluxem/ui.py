@@ -414,10 +414,12 @@ HTML_TEMPLATE = """
         <template x-for="(load, index) in config.deferrable_loads" :key="index">
           <div class="glass rounded-xl p-5 space-y-4 border border-slate-800 hover:border-slate-700 transition">
             <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div class="flex items-center space-x-2">
-                <i :class="load.continuous ? 'fa-solid fa-water text-cyan-400' : 'fa-solid fa-bolt text-amber-400'"></i>
+              <div class="flex items-center space-x-2 flex-wrap gap-y-1">
+                <i :class="load.critical ? 'fa-solid fa-fire-flame-curved text-rose-400' : (load.solar_only ? 'fa-solid fa-sun text-amber-400' : 'fa-solid fa-leaf text-indigo-400')"></i>
                 <span class="font-semibold text-white" x-text="load.name || load.id || 'New Load'"></span>
-                <span class="text-xs px-2 py-0.5 rounded font-mono" :class="load.continuous ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'" x-text="load.continuous ? 'Continuous' : 'Flexible'"></span>
+                <span class="text-xs px-2 py-0.5 rounded font-mono" :class="load.critical ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : (load.solar_only ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20')" x-text="load.critical ? 'Critical (Mandatory)' : (load.solar_only ? 'Solar Only' : 'Opportunistic')"></span>
+                <span class="text-xs px-2 py-0.5 rounded font-mono" :class="load.continuous ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20' : 'bg-slate-500/10 text-slate-400 border border-slate-500/20'" x-text="load.continuous ? 'Continuous' : 'Flexible'"></span>
+                <span x-show="load.complete_on_cutoff" class="text-xs px-2 py-0.5 rounded font-mono bg-teal-500/10 text-teal-400 border border-teal-500/20" title="Auto-detects thermostat cutoff">Thermostat Cutoff</span>
               </div>
               <button @click="removeLoad(index)" class="text-slate-500 hover:text-rose-400 transition p-1">
                 <i class="fa-solid fa-trash-can"></i>
@@ -460,18 +462,59 @@ HTML_TEMPLATE = """
                 <label class="block text-slate-400 mb-1">HA Switch Entity (Optional)</label>
                 <input type="text" list="ha-switches" x-model="load.switch_entity_id" placeholder="switch.water_heater" class="w-full bg-slate-900/90 border border-slate-700 rounded-lg px-3 py-1.5 text-white font-mono focus:border-emerald-500 focus:outline-none">
               </div>
+
+              <!-- Opportunistic / Critical Configuration Section -->
+              <div class="col-span-2 pt-2 border-t border-slate-800/60 grid grid-cols-2 gap-3 bg-slate-950/40 p-2.5 rounded-lg">
+                <div class="col-span-2 flex items-center justify-between">
+                  <label class="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" x-model="load.critical" class="rounded bg-slate-900 border-slate-700 text-rose-500 focus:ring-0">
+                    <span class="font-medium text-white">Critical Load (Mandatory Daily Run)</span>
+                  </label>
+                  <span class="text-[11px] text-slate-400" x-text="load.critical ? 'Runs every day (uses grid if needed)' : 'Can skip on expensive/cloudy days'"></span>
+                </div>
+
+                <template x-if="!load.critical">
+                  <div class="contents">
+                    <div>
+                      <label class="block text-slate-400 mb-1">Max Skip Days (0-7)</label>
+                      <input type="number" x-model.number="load.max_skip_days" min="0" max="7" placeholder="1" class="w-full bg-slate-900/90 border border-slate-700 rounded-lg px-3 py-1.5 text-white focus:border-emerald-500 focus:outline-none">
+                      <span class="text-[10px] text-slate-500">Max days to defer before forcing run</span>
+                    </div>
+                    <div>
+                      <label class="block text-slate-400 mb-1">Max Grid Price ($/kWh)</label>
+                      <input type="number" x-model.number="load.max_buy_price" step="0.01" placeholder="e.g. 0.20" class="w-full bg-slate-900/90 border border-slate-700 rounded-lg px-3 py-1.5 text-white focus:border-emerald-500 focus:outline-none">
+                      <span class="text-[10px] text-slate-500">Only run on grid if price is below this</span>
+                    </div>
+                    <div class="col-span-2 flex items-center justify-between pt-1">
+                      <label class="flex items-center space-x-2 cursor-pointer">
+                        <input type="checkbox" x-model="load.solar_only" class="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-0">
+                        <span>Solar Only (Zero Grid Import)</span>
+                      </label>
+                      <div class="flex items-center space-x-1.5">
+                        <span class="text-[11px] text-slate-400">Prior Skips:</span>
+                        <input type="number" x-model.number="load.consecutive_days_skipped" min="0" class="w-12 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-center text-white text-[11px]">
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </div>
             </div>
 
-            <!-- Toggles for continuous & inclusion -->
-            <div class="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-300">
+            <!-- Toggles for continuous, cutoff & inclusion -->
+            <div class="pt-2 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-slate-300">
               <label class="flex items-center space-x-2 cursor-pointer">
                 <input type="checkbox" x-model="load.continuous" class="rounded bg-slate-900 border-slate-700 text-emerald-500 focus:ring-0">
-                <span>Continuous Block Mode</span>
+                <span>Continuous Block</span>
+              </label>
+
+              <label class="flex items-center space-x-2 cursor-pointer" title="Automatically considers daily quota satisfied when power drops to 0W after an active heating cycle (internal thermostat reached temperature)">
+                <input type="checkbox" x-model="load.complete_on_cutoff" class="rounded bg-slate-900 border-slate-700 text-teal-500 focus:ring-0">
+                <span>Thermostat Cutoff</span>
               </label>
 
               <label class="flex items-center space-x-2 cursor-pointer">
                 <input type="checkbox" x-model="load.is_included_in_total_load" class="rounded bg-slate-900 border-slate-700 text-emerald-500 focus:ring-0">
-                <span>In Whole-House Power Sensor</span>
+                <span>In Whole-House Power</span>
               </label>
             </div>
           </div>
@@ -1078,6 +1121,12 @@ HTML_TEMPLATE = """
             nominal_power_w: 2400.0,
             required_hours: 3.0,
             continuous: true,
+            critical: true,
+            max_skip_days: 1,
+            consecutive_days_skipped: 0,
+            max_buy_price: null,
+            solar_only: false,
+            complete_on_cutoff: false,
             is_running: false,
             is_included_in_total_load: true,
             power_sensor_entity_id: '',

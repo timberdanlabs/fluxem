@@ -34,8 +34,13 @@ The engine accepts flat, unified time-series arrays or structured records from H
 
 ### B. Flexible Deferrable Load Management
 Per-load configuration profiles replacing global assumptions:
-- **Continuous Mode (`continuous: true`):** Enforces a strict, unbroken run for loads like hot water once initiated. It respects active mid-cycle states and will not split runtime across days or take midday gaps.
-- **Flexible Mode (`continuous: false`):** Allows splitting across optimal pricing/solar windows (e.g., pool pumps) up to a maximum daily startup limit (`max_starts_per_day`).
+- **Critical / Mandatory Mode (`critical: true`):** Enforces mandatory daily completion for essential thermal/hygiene loads (hot water systems, heat pumps), scheduling within the optimal window even if grid import is required.
+- **Opportunistic / Non-Critical Mode (`critical: false`):** Allows deferring non-essential loads (pool pumps, EV charging, dehumidifiers) when energy prices are high or solar is scarce.
+  - **`max_skip_days`:** Configures maximum consecutive skip days before automatically promoting the load to a mandatory run.
+  - **`max_buy_price`:** Configurable import price ceiling ($/kWh) below which grid running is allowed.
+  - **`solar_only`:** Strict mode restricting operation exclusively to 100% surplus solar power.
+- **Continuous Mode (`continuous: true`):** Enforces a strict, unbroken run for thermal loads once initiated. It respects active mid-cycle states and will not split runtime across days or take midday gaps.
+- **Flexible Mode (`continuous: false`):** Allows splitting across optimal pricing/solar windows up to a maximum daily startup limit (`max_starts_per_day`).
 - **State-Aware Tracking:** Automatically accounts for partial runtimes already accumulated today, preventing over-allocation or resetting running blocks.
 - **Direct Consumption Metering (`current_power_w`):** Accepts real-time power draw from smart plugs/switches for exact load attribution.
 

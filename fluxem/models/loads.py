@@ -88,6 +88,45 @@ class DeferrableLoad(BaseModel):
         description="Load priority ranking (1 = standard, higher numbers = higher priority)",
         examples=[1],
     )
+    critical: bool = Field(
+        default=True,
+        description="If True, mandatory daily run (must satisfy required quota every day, using grid power if necessary). "
+                    "If False, opportunistic run that can be deferred/skipped on expensive or low-solar days.",
+        examples=[True],
+    )
+    max_skip_days: Optional[int] = Field(
+        default=1,
+        ge=0,
+        description="Maximum consecutive days an opportunistic load can be skipped before being forced to run (e.g. 1 = can skip at most 1 day)",
+        examples=[1],
+    )
+    consecutive_days_skipped: int = Field(
+        default=0,
+        ge=0,
+        description="Runtime tracking: number of consecutive days this load has already been skipped prior to today",
+        examples=[0],
+    )
+    max_buy_price: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Maximum retail grid import price ($/kWh) the load will accept when importing from grid (for opportunistic runs)",
+        examples=[0.20],
+    )
+    solar_only: bool = Field(
+        default=False,
+        description="If True, the load will strictly only run when surplus solar power is available (no grid import)",
+        examples=[False],
+    )
+    complete_on_cutoff: bool = Field(
+        default=False,
+        description="If True, automatically marks today's requirement as satisfied when power consumption drops to 0W (idle) after an active heating cycle (e.g. water heater thermostat satisfied)",
+        examples=[True],
+    )
+    is_cycle_completed_today: bool = Field(
+        default=False,
+        description="Runtime state: True if the appliance has completed its heating cycle / thermostat cutoff today",
+        examples=[False],
+    )
     power_sensor_entity_id: Optional[str] = Field(
         default=None,
         description="Home Assistant entity ID for real-time power monitoring (e.g. sensor.water_heater_power)",
@@ -109,6 +148,12 @@ class DeferrableLoad(BaseModel):
             self.required_hours = self.required_kwh / (self.nominal_power_w / 1000.0)
         elif self.required_kwh is None and self.required_hours is not None:
             self.required_kwh = self.required_hours * (self.nominal_power_w / 1000.0)
+
+        # Handle solar_only and critical interactions
+        if self.solar_only:
+            if "critical" in self.model_fields_set and self.critical:
+                raise ValueError(f"Load '{self.id}' cannot have both 'critical: true' (mandatory grid run) and 'solar_only: true' (zero grid import).")
+            self.critical = False
 
         if not self.name:
             self.name = self.id.replace("_", " ").title()
@@ -133,7 +178,9 @@ class DeferrableLoad(BaseModel):
 
     @property
     def remaining_hours_needed(self) -> float:
-        """Operating hours still needed today after accounting for accumulated runtime."""
+        """Operating hours still needed today after accounting for accumulated runtime or cycle completion."""
+        if self.is_cycle_completed_today:
+            return 0.0
         if self.required_hours is None:
             return 0.0
         return max(0.0, self.required_hours - self.accumulated_hours_today)
@@ -146,4 +193,4 @@ class DeferrableLoad(BaseModel):
     @property
     def is_satisfied(self) -> bool:
         """True if the daily requirement has already been satisfied."""
-        return self.remaining_hours_needed <= 1e-6
+        return self.is_cycle_completed_today or self.remaining_hours_needed <= 1e-6

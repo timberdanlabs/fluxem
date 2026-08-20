@@ -151,6 +151,11 @@ class HomeAssistantPayload(BaseModel):
         le=14,
         description="Number of past days history to analyze for load forecasting (1 to 14 days)",
     )
+    ha_timezone: Optional[str] = Field(
+        default=None,
+        description="Timezone of the Home Assistant instance (e.g. 'Australia/Sydney', 'America/New_York')",
+        examples=["Australia/Sydney"],
+    )
     force_reoptimize: bool = Field(
         default=False,
         description="If True, forces full re-optimization ignoring Drift Watchdog thresholds",
@@ -169,6 +174,13 @@ class HomeAssistantPayload(BaseModel):
         """
         if not isinstance(data, dict):
             return data
+
+        # Extract timezone aliases
+        if "ha_timezone" not in data or data.get("ha_timezone") is None:
+            for tz_alias in ["timezone", "time_zone", "ha_tz"]:
+                if tz_alias in data and data[tz_alias]:
+                    data["ha_timezone"] = str(data[tz_alias])
+                    break
 
         # Array mappings (must be list/tuple)
         array_mappings = {

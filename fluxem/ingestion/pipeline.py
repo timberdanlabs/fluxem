@@ -140,10 +140,15 @@ class IngestionPipeline:
         target_timestep = payload_model.target_timestep_minutes
 
         # 3. Normalize & Align Time Series
+        effective_tz = payload_model.ha_timezone or getattr(stored_cfg, "ha_timezone", None)
+        if effective_tz and str(effective_tz).lower() in ("auto", "none", ""):
+            effective_tz = None
+
         processed_ts, norm_warnings = TimeSeriesNormalizer.normalize(
             df=cleaned_df,
             target_timestep_minutes=target_timestep,
             default_timestep_minutes=self.default_timestep_minutes,
+            timezone_name=effective_tz,
         )
         all_warnings.extend(norm_warnings)
 

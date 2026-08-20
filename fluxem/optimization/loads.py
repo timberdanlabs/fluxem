@@ -85,12 +85,14 @@ class DeferrableLoadScheduler:
             return []
 
         tz = None
-        tz_str = ha_timezone or getattr(config_store.config, "ha_timezone", None)
-        if tz_str and tz_str.lower() not in ("auto", "none", ""):
-            try:
-                tz = ZoneInfo(tz_str)
-            except Exception:
-                pass
+        candidates = [ha_timezone, getattr(config_store.config, "ha_timezone", None)]
+        for tz_str in candidates:
+            if tz_str and tz_str.lower() not in ("auto", "none", ""):
+                try:
+                    tz = ZoneInfo(tz_str)
+                    break
+                except Exception:
+                    pass
 
         days_map: Dict[Any, List[int]] = {}
         for idx, ts in enumerate(timestamps):
@@ -128,11 +130,12 @@ class DeferrableLoadScheduler:
         if total_steps == 0:
             return schedule, warnings
 
-        # 1. Compute global time window mask and step costs
+        # 1. Compute global time window mask and step costs in local timezone
         valid_mask = cls._compute_time_window_mask(
             timestamps=time_series.timestamps,
             window_start=load.window_start_time,
             window_end=load.window_end_time,
+            ha_timezone=time_series.timezone_name,
         )
 
         step_costs = cls._compute_marginal_costs(
@@ -150,6 +153,8 @@ class DeferrableLoadScheduler:
             ha_timezone=time_series.timezone_name,
         )
 
+        consecutive_skips = int(load.consecutive_days_skipped or 0)
+
         for day_idx, day_indices in enumerate(day_groups):
             day_total_steps = len(day_indices)
             if day_total_steps == 0:
@@ -157,6 +162,20 @@ class DeferrableLoadScheduler:
 
             # Determine runtime requirement for this specific day
             if day_idx == 0:
+                if load.is_cycle_completed_today or (
+                    load.complete_on_cutoff
+                    and load.accumulated_hours_today >= 0.25
+                    and not load.is_running
+                    and (load.current_power_w is None or load.current_power_w <= 15.0)
+                ):
+                    warnings.append(
+                        f"Load '{load.id}' ({load.name}) thermostat cutoff auto-detected "
+                        f"(completed {load.accumulated_hours_today:.1f}h heating cycle today). "
+                        f"Daily requirement marked satisfied."
+                    )
+                    consecutive_skips = 0
+                    continue
+
                 remaining_hours = max(0.0, load.required_hours - load.accumulated_hours_today)
                 is_running = load.is_running
                 if remaining_hours <= 1e-5:
@@ -164,6 +183,7 @@ class DeferrableLoadScheduler:
                         f"Load '{load.id}' ({load.name}) already completed required runtime today "
                         f"({load.accumulated_hours_today:.1f}h / {load.required_hours:.1f}h)."
                     )
+                    consecutive_skips = 0
                     continue
             else:
                 remaining_hours = load.required_hours
@@ -175,9 +195,10 @@ class DeferrableLoadScheduler:
                 steps_needed = day_total_steps
 
             if steps_needed <= 0:
+                consecutive_skips = 0
                 continue
 
-            # Check validity within this day
+            # Check base time window validity within this day
             day_valid_mask = [valid_mask[i] for i in day_indices]
             valid_in_day = [i for i, v in enumerate(day_valid_mask) if v]
             if not valid_in_day:
@@ -185,44 +206,158 @@ class DeferrableLoadScheduler:
                     f"Load '{load.id}' has no valid timesteps on Day {day_idx + 1} within time window "
                     f"[{load.window_start_time} - {load.window_end_time}]."
                 )
+                consecutive_skips += 1
                 continue
 
-            if len(valid_in_day) < steps_needed:
-                warnings.append(
-                    f"Load '{load.id}' Day {day_idx + 1} time window contains only {len(valid_in_day)} valid steps, "
-                    f"less than required {steps_needed} steps. Scheduling max possible in window."
-                )
-                steps_needed = len(valid_in_day)
+            # Evaluate criticality: mandatory if critical=True, or if max_skip_days limit is reached, or actively running mid-cycle
+            is_mandatory = (
+                load.critical is True
+                or (load.max_skip_days is not None and consecutive_skips >= load.max_skip_days)
+                or (day_idx == 0 and is_running)
+            )
 
             day_step_costs = [step_costs[i] for i in day_indices]
-
-            # Build a temporary day load object to schedule within the day
             day_load = load.model_copy()
             day_load.is_running = is_running
 
-            if load.continuous:
-                chosen_rel, cont_warnings = cls._schedule_continuous_block(
-                    load=day_load,
-                    steps_needed=steps_needed,
-                    step_costs=day_step_costs,
-                    valid_mask=day_valid_mask,
-                    total_steps=day_total_steps,
-                )
-                warnings.extend(cont_warnings)
-            else:
-                chosen_rel, flex_warnings = cls._schedule_flexible_clusters(
-                    load=day_load,
-                    steps_needed=steps_needed,
-                    step_costs=day_step_costs,
-                    valid_mask=day_valid_mask,
-                    total_steps=day_total_steps,
-                )
-                warnings.extend(flex_warnings)
+            if is_mandatory:
+                # Log warning if non-critical load was escalated to mandatory run due to max_skip_days
+                if not load.critical and load.max_skip_days is not None and consecutive_skips >= load.max_skip_days:
+                    warnings.append(
+                        f"Opportunistic load '{load.id}' ({load.name}) reached max skip limit "
+                        f"({load.max_skip_days}d with {consecutive_skips} prior skipped days). "
+                        f"Scheduling mandatory run on Day {day_idx + 1}."
+                    )
 
-            # Map relative day indices to global schedule
-            for rel_idx in chosen_rel:
-                global_idx = day_indices[rel_idx]
-                schedule[global_idx] = float(load.nominal_power_w)
+                if len(valid_in_day) < steps_needed:
+                    warnings.append(
+                        f"Load '{load.id}' Day {day_idx + 1} time window contains only {len(valid_in_day)} valid steps, "
+                        f"less than required {steps_needed} steps. Scheduling max possible in window."
+                    )
+                    eff_steps_needed = len(valid_in_day)
+                else:
+                    eff_steps_needed = steps_needed
+
+                if load.continuous:
+                    chosen_rel, cont_warnings = cls._schedule_continuous_block(
+                        load=day_load,
+                        steps_needed=eff_steps_needed,
+                        step_costs=day_step_costs,
+                        valid_mask=day_valid_mask,
+                        total_steps=day_total_steps,
+                    )
+                    warnings.extend(cont_warnings)
+                else:
+                    chosen_rel, flex_warnings = cls._schedule_flexible_clusters(
+                        load=day_load,
+                        steps_needed=eff_steps_needed,
+                        step_costs=day_step_costs,
+                        valid_mask=day_valid_mask,
+                        total_steps=day_total_steps,
+                    )
+                    warnings.extend(flex_warnings)
+
+                for rel_idx in chosen_rel:
+                    global_idx = day_indices[rel_idx]
+                    schedule[global_idx] = float(load.nominal_power_w)
+
+                consecutive_skips = 0
+
+            else:
+                # Opportunistic / Non-Critical Scheduling
+                # Build opportunistic mask based on excess solar and price threshold
+                opp_mask: List[bool] = []
+                for r in range(day_total_steps):
+                    if not day_valid_mask[r]:
+                        opp_mask.append(False)
+                        continue
+
+                    global_i = day_indices[r]
+                    solar_w = available_excess_solar[global_i]
+                    buy_p = time_series.buy_prices[global_i]
+
+                    if load.solar_only:
+                        has_solar = solar_w >= (load.nominal_power_w * 0.95)
+                        opp_mask.append(has_solar)
+                    else:
+                        if solar_w >= (load.nominal_power_w * 0.95):
+                            opp_mask.append(True)
+                        elif load.max_buy_price is not None:
+                            opp_mask.append(buy_p <= load.max_buy_price)
+                        else:
+                            opp_mask.append(True)
+
+                opp_candidates = [i for i, v in enumerate(opp_mask) if v]
+                max_skip_str = f"/{load.max_skip_days}" if load.max_skip_days is not None else ""
+
+                if load.continuous:
+                    # Check if a full unbroken block of length steps_needed exists within opp_mask
+                    has_continuous_candidate = False
+                    for start_r in range(0, day_total_steps - steps_needed + 1):
+                        if all(opp_mask[start_r + offset] for offset in range(steps_needed)):
+                            has_continuous_candidate = True
+                            break
+
+                    if has_continuous_candidate:
+                        chosen_rel, cont_warnings = cls._schedule_continuous_block(
+                            load=day_load,
+                            steps_needed=steps_needed,
+                            step_costs=day_step_costs,
+                            valid_mask=opp_mask,
+                            total_steps=day_total_steps,
+                        )
+                        warnings.extend(cont_warnings)
+                        for rel_idx in chosen_rel:
+                            schedule[day_indices[rel_idx]] = float(load.nominal_power_w)
+                        consecutive_skips = 0
+                    else:
+                        consecutive_skips += 1
+                        warnings.append(
+                            f"Non-critical continuous load '{load.id}' ({load.name}) skipped on Day {day_idx + 1} "
+                            f"(consecutive skips: {consecutive_skips}{max_skip_str}): "
+                            f"no contiguous window of {remaining_hours:.1f}h meets solar/price criteria."
+                        )
+
+                else:
+                    # Flexible non-critical load
+                    if len(opp_candidates) >= steps_needed:
+                        chosen_rel, flex_warnings = cls._schedule_flexible_clusters(
+                            load=day_load,
+                            steps_needed=steps_needed,
+                            step_costs=day_step_costs,
+                            valid_mask=opp_mask,
+                            total_steps=day_total_steps,
+                        )
+                        warnings.extend(flex_warnings)
+                        for rel_idx in chosen_rel:
+                            schedule[day_indices[rel_idx]] = float(load.nominal_power_w)
+                        consecutive_skips = 0
+                    elif len(opp_candidates) > 0:
+                        # Schedule partial run with available cheap/solar steps
+                        partial_steps = len(opp_candidates)
+                        chosen_rel, flex_warnings = cls._schedule_flexible_clusters(
+                            load=day_load,
+                            steps_needed=partial_steps,
+                            step_costs=day_step_costs,
+                            valid_mask=opp_mask,
+                            total_steps=day_total_steps,
+                        )
+                        warnings.extend(flex_warnings)
+                        for rel_idx in chosen_rel:
+                            schedule[day_indices[rel_idx]] = float(load.nominal_power_w)
+                        consecutive_skips = 0
+                        warnings.append(
+                            f"Non-critical load '{load.id}' ({load.name}) scheduled partial run "
+                            f"({partial_steps * dt_hours:.1f}h / {remaining_hours:.1f}h) on Day {day_idx + 1} "
+                            f"utilizing available solar/cheap intervals."
+                        )
+                    else:
+                        consecutive_skips += 1
+                        warnings.append(
+                            f"Non-critical load '{load.id}' ({load.name}) deferred/skipped on Day {day_idx + 1} "
+                            f"(consecutive skips: {consecutive_skips}{max_skip_str}) "
+                            f"due to high grid prices / lack of solar."
+                        )
 
         return schedule, warnings
 
@@ -475,10 +610,11 @@ class DeferrableLoadScheduler:
         timestamps: List[datetime],
         window_start: Optional[str],
         window_end: Optional[str],
+        ha_timezone: Optional[str] = None,
     ) -> List[bool]:
         r"""
         Generates a boolean mask indicating whether each timestamp falls within the configured time window.
-        Supports both 'HH:MM' time strings and ISO timestamps.
+        Supports both 'HH:MM' time strings and ISO timestamps, evaluated in the local timezone.
         r"""
         if not window_start and not window_end:
             return [True] * len(timestamps)
@@ -486,9 +622,26 @@ class DeferrableLoadScheduler:
         parsed_start_time = cls._parse_time_str(window_start)
         parsed_end_time = cls._parse_time_str(window_end)
 
+        tz = None
+        candidates = [ha_timezone, getattr(config_store.config, "ha_timezone", None)]
+        for tz_str in candidates:
+            if tz_str and tz_str.lower() not in ("auto", "none", ""):
+                try:
+                    tz = ZoneInfo(tz_str)
+                    break
+                except Exception:
+                    pass
+
         mask: List[bool] = []
         for ts in timestamps:
-            t = ts.time()
+            if ts.tzinfo is not None and tz is not None:
+                local_dt = ts.astimezone(tz)
+            elif ts.tzinfo is not None:
+                local_dt = ts
+            else:
+                local_dt = ts
+
+            t = local_dt.time()
 
             if parsed_start_time and parsed_end_time:
                 if parsed_start_time <= parsed_end_time:
