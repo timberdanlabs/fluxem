@@ -27,7 +27,9 @@ The engine accepts flat, unified time-series arrays or structured records from H
   - Eliminates the need for custom Home Assistant template helper sensors that manually subtract deferrable load powers from total house power.
   - Tracks individual deferrable load consumption sensors (`current_power_w`) or active running states (`nominal_power_w`).
   - Automatically calculates pure baseline demand:
-    $$\text{Baseline Load (W)} = \max\left(0, \text{house\_power} - \sum \text{Active Deferrable Power (W)}\right)$$
+    ```text
+    Baseline Load (W) = max(0, house_power - sum(Active Deferrable Power))
+    ```
   - Prevents double-counting loads when appliances are running mid-cycle.
 
 ### B. Flexible Deferrable Load Management
@@ -47,7 +49,9 @@ A proactive look-ahead module that optimizes battery charging and energy trading
    - **Mode Flag:** `enable_export_arbitrage: bool = False` (disabled by default).
    - **Strategy:** Evaluates future forecasted export (sell/feed-in) prices against current grid import (buy) prices.
    - **Efficiency-Adjusted Hurdle Rate:**
-     $$\text{Net Margin} = (\eta_{\text{round\_trip}} \times P_{\text{sell}}(t_{\text{export}})) - P_{\text{buy}}(t_{\text{charge}}) - \text{battery\_degradation\_cost}$$
+     ```text
+     Net Margin = (Round Trip Efficiency × Sell Price(export)) - Buy Price(charge) - Battery Degradation Cost
+     ```
    - When $\text{Net Margin} \ge \text{min\_profit\_threshold}$ (e.g., $\ge \$0.03/\text{kWh}$), FluxEM schedules a grid-charge window at $t_{\text{charge}}$ and a matching discharge/export window at $t_{\text{export}}$.
    - Guarantees battery discharge duration matches the arbitrage charge volume while respecting minimum reserve SOC and inverter export power limits.
 

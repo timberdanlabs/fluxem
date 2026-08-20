@@ -12,14 +12,14 @@ FluxEM is built with Python 3.12, FastAPI, Pandas, and NumPy:
   - Ingests flat time-series arrays or structured records from any Home Assistant integration (Solcast, Amber, Tibber, Nordpool, etc.).
   - Automatic frequency detection and alignment to uniform intervals (5, 15, 30, 60 minutes).
   - Robust data validation, NaN / missing value imputation, non-monotonic sorting, and unit conversion (W vs kW, $/kWh vs c/kWh).
-  - **Zero-Helper Deferrable Load Deduction**: Automatically computes pure baseline home demand ($\text{Baseline} = \text{house\_power} - \sum \text{deferrable\_power}$) so you don't need custom Home Assistant template sensors.
+  - **Zero-Helper Deferrable Load Deduction**: Automatically computes pure baseline home demand (`Baseline = house_power - sum(deferrable_power)`) so you don't need custom Home Assistant template sensors.
 - **Module B: Flexible Deferrable Load Management**:
   - **Continuous Mode (`continuous: true`)**: Enforces strict unbroken runs for thermal loads (hot water, heat pumps) and preserves active mid-cycle states from step 0.
   - **Flexible Mode (`continuous: false`)**: Optimizes split runs across cheap price dips and solar peaks while enforcing equipment cycle constraints (`max_starts_per_day`).
   - Priority-based solar stacking and time window boundaries (`window_start_time` / `window_end_time`).
 - **Module C: Intelligent Grid Pre-Charging & Dynamic Battery Arbitrage**:
   - **Deficit Pre-Charging**: Looks ahead for future expensive peak import periods when the battery would be exhausted, scheduling just-in-time off-peak grid charging.
-  - **Dynamic Export Arbitrage (Optional Mode)**: Evaluates feed-in price spikes against cheap import rates and round-trip efficiency losses ($\eta_{\text{round\_trip}} \times P_{\text{sell}} - P_{\text{buy}} - \text{wear} \ge \text{margin}$), charging from the grid to export at peak feed-in tariffs.
+  - **Dynamic Export Arbitrage (Optional Mode)**: Evaluates feed-in price spikes against cheap import rates and round-trip efficiency losses (`Efficiency × Sell_Price - Buy_Price - Wear_Cost ≥ Margin`), charging from the grid to export at peak feed-in tariffs.
 - **Module D: Drift-Triggered MPC (Smart Watchdog)**:
   - Variance watchdog comparing real-time sensor measurements against forecasted curves.
   - Holds existing baseline plans when within tolerances, re-optimizing only on statistical drift (solar cloud cover, spot price spikes, load surges).
@@ -75,12 +75,3 @@ docker run -d --name fluxem --restart unless-stopped -p 8000:8000 -v $(pwd)/data
 | `POST` | `/api/v1/optimize` | Execute optimization, watchdog evaluation, and schedule generation |
 | `POST` | `/api/v1/webhook` | Direct webhook trigger for Home Assistant automations |
 | `GET` | `/docs` | Interactive OpenAPI Swagger UI documentation |
-
----
-
-## 🧪 Testing
-
-```bash
-# Run full pytest test suite with coverage
-.venv/bin/pytest -v --cov=fluxem --cov-report=term-missing
-```

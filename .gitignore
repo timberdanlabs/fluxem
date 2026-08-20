@@ -40,3 +40,8 @@ data/config.json
 data/*.sqlite
 data/*.db
 !data/config.example.json
+
+# Internal test suite & dev dependencies
+tests/
+requirements-dev.txt
+
