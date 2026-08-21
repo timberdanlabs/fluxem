@@ -36,10 +36,10 @@ htmlcov/
 *.swo
 
 # Local runtime data & credentials
-data/config.json
+data/*.json
+!data/config.example.json
 data/*.sqlite
 data/*.db
-!data/config.example.json
 
 # Internal test suite & dev dependencies
 tests/

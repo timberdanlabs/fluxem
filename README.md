@@ -1,63 +1,113 @@
 # FluxEM ⚡
 
-**FluxEM** is a lightweight, self-hosted energy optimization microservice engineered for [Home Assistant](https://www.home-assistant.io/). It serves as a modern, transparent, and predictable alternative to EMHASS by eliminating rigid solver constraints, supporting agnostic data inputs, and providing intelligent event-driven re-optimization.
+[![Release](https://img.shields.io/badge/version-2.0.0-emerald.svg)](https://github.com/timberdanlabs/fluxem)
+[![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-Ingress%20%26%20MQTT-41bdf5.svg)](https://www.home-assistant.io/)
+
+**FluxEM** is a modern, lightweight, and self-hosted Model Predictive Control (MPC) energy optimization microservice engineered for **[Home Assistant](https://www.home-assistant.io/)**. It delivers predictable, transparent, and intelligent energy dispatch without the heavy solver dependencies, brittle mathematical constraints, or complex YAML overhead of traditional tools.
 
 ---
 
-## 🏗️ Architecture & Core Modules
+## 🌟 What's New in FluxEM v2.0
 
-FluxEM is built with Python 3.12, FastAPI, Pandas, and NumPy:
-
-- **Module A: Agnostic Data Ingestion (Bring Your Own Sensors)**:
-  - Ingests flat time-series arrays or structured records from any Home Assistant integration (Solcast, Amber, Tibber, Nordpool, etc.).
-  - Automatic frequency detection and alignment to uniform intervals (5, 15, 30, 60 minutes).
-  - Robust data validation, NaN / missing value imputation, non-monotonic sorting, and unit conversion (W vs kW, $/kWh vs c/kWh).
-  - **Zero-Helper Deferrable Load Deduction**: Automatically computes pure baseline home demand (`Baseline = house_power - sum(deferrable_power)`) so you don't need custom Home Assistant template sensors.
-- **Module B: Flexible & Critical Deferrable Load Management**:
-  - **Critical / Mandatory Mode (`critical: true`)**: Enforces daily completion for essential thermal/hygiene loads (hot water, heat pumps), scheduling within the lowest-cost window (importing from grid if needed).
-  - **Opportunistic / Non-Critical Mode (`critical: false`)**: Defers non-essential loads (pool pumps, EV charging) on high-price/low-solar days with configurable `max_skip_days`, `max_buy_price` ceilings, or `solar_only` restrictions.
-  - **Continuous Mode (`continuous: true`)**: Enforces strict unbroken runs for thermal loads and preserves active mid-cycle states from step 0.
-  - **Flexible Mode (`continuous: false`)**: Optimizes split runs across cheap price dips and solar peaks while enforcing equipment cycle constraints (`max_starts_per_day`).
-  - Priority-based solar stacking and time window boundaries (`window_start_time` / `window_end_time`).
-- **Module C: Intelligent Grid Pre-Charging & Dynamic Battery Arbitrage**:
-  - **Deficit Pre-Charging**: Looks ahead for future expensive peak import periods when the battery would be exhausted, scheduling just-in-time off-peak grid charging.
-  - **Dynamic Export Arbitrage (Optional Mode)**: Evaluates feed-in price spikes against cheap import rates and round-trip efficiency losses (`Efficiency × Sell_Price - Buy_Price - Wear_Cost ≥ Margin`), charging from the grid to export at peak feed-in tariffs.
-- **Module D: Drift-Triggered MPC (Smart Watchdog)**:
-  - Variance watchdog comparing real-time sensor measurements against forecasted curves.
-  - Holds existing baseline plans when within tolerances, re-optimizing only on statistical drift (solar cloud cover, spot price spikes, load surges).
-- **Module E: Direct Home Assistant API & MQTT Integration**:
-  - **Direct HA API (Zero-YAML)**: Connects directly to Home Assistant using a Long-Lived Access Token to auto-discover entities and fetch solar & price forecasts.
-  - **Historical Load Forecasting**: Analyzes past consumption history over a configurable lookahead (1 to 14 days) to generate household load curves.
-  - **Configurable Lookahead Horizon**: Plan optimizations across **1 Day (24h)**, **2 Days (48h)**, or **3 Days (72h)**.
-  - **MQTT & Real-Time Controls**: Streams scheduled power curves, real-time switch commands (`ON`/`OFF`), and HA discovery payloads.
+- 📅 **Midnight-to-Midnight Calendar Horizon**: Full 24-hour daily timeline (00:00 to 23:59) with dual view modes (**Today** and **Full Multi-Day Forecast**).
+- 📍 **Vertical `[ NOW ]` Timeline Indicator**: Real-time glowing indicator across the chart and auto-centering step breakdown table.
+- 🎨 **4-Column Grouped Legend with Master Toggles**: Intuitive categorization (Solar, Home Demand, Battery, Deferrable Loads) with single-click master eye toggles (`👁️`) for entire groups.
+- 🎯 **Plan of Record & Real-Time Adherence Tracking**: Automatically locks daily morning baseline plans and tracks live adherence KPIs (Actual vs. Planned kWh for Solar, Load, and Battery SOC).
+- ⚡ **Real-Time Step-Aligned MQTT Controls**: Real-time virtual switch states (`ON`/`OFF`), battery power setpoints (W), and grid import commands synchronized with the active interval.
+- 🔋 **Smart Deficit Pre-Charging Engine**: Proactively detects upcoming peak price jumps and charges the battery from cheap grid power just-in-time, saving hundreds of dollars during volatile wholesale pricing.
 
 ---
 
-## 🎨 Interactive WebUI Dashboard
+## 🏗️ Core Architecture & Modules
 
-Access the browser interface at **`http://<FLUXEM_IP>:8000/ui`**:
-- 🎛️ **Deferrable Loads Manager**: Add, edit, and delete appliances with Critical/Opportunistic, Continuous/Flexible, and Solar-Only toggles.
-- 🔋 **Battery Storage Configuration**: Usable capacity, SOC limits, and efficiency rates.
-- 🏠 **Home Assistant API & Horizon**: Select **1, 2, or 3 Days** lookahead and **1 to 14 Days** history for home load forecasting.
-- 📈 **Dynamic Arbitrage**: Configure grid pre-charging and feed-in export trading.
-- 🐕 **Drift Watchdog**: Visual sliders for solar, price, and load variance thresholds.
-- 📊 **Live Preview & Simulation**: Interactive Chart.js power curve graph.
+```mermaid
+flowchart TD
+    subgraph Inputs["1. Agnostic Ingestion"]
+        HA[Home Assistant API] -->|Solar Forecast| A[Ingestion Pipeline]
+        HA -->|Wholesale Prices| A
+        HA -->|House & Solar Power| A
+        HA -->|Battery SOC| A
+    end
+
+    subgraph Optimization["2. Optimization & Dispatch"]
+        A --> B[Load Scheduler]
+        B -->|Priority Stacking| B
+        B -->|Continuous & Flexible| B
+        B --> C[Battery Engine]
+        C -->|Pass 1: Solar Self-Consumption| C
+        C -->|Pass 2: Deficit Pre-Charging| C
+        C -->|Pass 3: Export Arbitrage| C
+    end
+
+    subgraph Monitoring["3. MPC Watchdog & Adherence"]
+        C --> D[Drift Watchdog]
+        D -->|Solar / Price / Load Drift| D
+        C --> E[Plan of Record]
+        E -->|Adherence KPIs| E
+    end
+
+    subgraph Outputs["4. Controls & Visuals"]
+        D --> F[MQTT Discovery & Switches]
+        D --> G[Interactive WebUI Dashboard]
+        F -->|Real-Time Switch States| HA
+        F -->|Target Battery Power| HA
+    end
+```
+
+### Module A: Agnostic Data Ingestion (Bring Your Own Sensors)
+- Compatible with any Home Assistant integration: **Solcast, Open-Meteo, Amber Electric, Tibber, Nordpool, Powerpal, Shelly**, and inverter meters.
+- Automatic frequency alignment across 5, 15, 30, and 60-minute intervals.
+- **Zero-Helper Deferrable Load Decomposition**: Automatically isolates pure baseline household consumption (`Baseline = house_power - sum(deferrable_loads)`) without requiring custom template sensors.
+
+### Module B: Flexible & Critical Deferrable Load Management
+- **Critical / Mandatory Appliances (`critical: true`)**: Enforces daily cycle completion for essential thermal/hygiene loads (Hot Water, Heat Pumps), scheduling them across the lowest-cost solar or off-peak periods.
+- **Opportunistic / Non-Critical Appliances (`critical: false`)**: Intelligently skips or defers discretionary loads (Pool Pumps, EV Charging) on expensive or overcast days, honoring `max_skip_days`, price ceilings (`max_buy_price`), and `solar_only` constraints.
+- **Continuous Unbroken Block Mode (`continuous: true`)**: Guarantees uninterrupted operation for heat pumps and water heaters, anchoring active mid-cycle runs from the current interval.
+- **Flexible Cluster Mode (`continuous: false`)**: Optimizes split runs across price dips while enforcing equipment cycle restrictions (`max_starts_per_day`).
+
+### Module C: Smart Deficit Pre-Charging & Battery Arbitrage
+- **Deficit Pre-Charging**: Simulates home and appliance energy needs ahead of evening peak prices. If the battery would deplete during high tariffs, it charges the battery from cheap grid power during off-peak or solar valley hours.
+- **Dynamic Export Arbitrage (Optional)**: Automatically capitalizes on extreme wholesale feed-in tariff spikes by charging off-peak and exporting when `Efficiency × Sell_Price - Buy_Price - Wear_Cost ≥ Profit_Margin`.
+
+### Module D: Drift-Triggered MPC (Smart Watchdog)
+- Compares live telemetry against the active schedule for the current timestep.
+- Holds the existing baseline plan when sensors are within configured variance tolerances, re-optimizing only on statistical drift (e.g. sudden cloud cover, spot price spikes, or unexpected load surges).
+
+### Module E: Direct Home Assistant API & MQTT Real-Time Control
+- **Zero-YAML Setup**: Connects directly to Home Assistant via Long-Lived Access Token with live entity autocompletion.
+- **Historical Load Forecasting**: Analyzes past consumption patterns across a configurable history window (1 to 14 days).
+- **Native MQTT Discovery**: Publishes real-time target battery power, grid import setpoints, and virtual switch entities (`switch.fluxem_<appliance_id>`).
 
 ---
 
-## 🚀 Quickstart
+## 🎨 Interactive Web Dashboard
 
-### 🏠 Home Assistant Add-on (Recommended)
+Access the browser interface at **`http://<FLUXEM_IP>:8000/ui`** (or via Home Assistant Ingress):
+
+- 📈 **Interactive Trajectory Graph**: 24h/multi-day Chart.js visualization with dual Y-axis scaling (Watts on left, Battery SOC % on right).
+- 🏷️ **4-Column Grouped Legend**: Interactive visibility toggles with category master controls.
+- 📋 **Auto-Centering Breakdown Table**: Displays exact numerical telemetry for each interval, automatically scrolling to center the active `[ NOW ]` interval.
+- 🎯 **Adherence Header**: Live KPI meters tracking realized vs. planned solar generation, household demand, and battery SOC adherence.
+- ⚙️ **In-App Configuration Modal**: Manage HA entity mappings, battery parameters, appliance constraints, and watchdog thresholds with instant toast feedback.
+
+---
+
+## 🚀 Installation & Quickstart
+
+### 🏠 1. Home Assistant Add-on (Recommended)
+
 1. In Home Assistant, navigate to **Settings ➔ Add-ons ➔ Add-on Store**.
-2. Click the **three dots** (top right) ➔ **Repositories**.
+2. Click the **three dots** in the top right ➔ **Repositories**.
 3. Add repository URL: `https://github.com/timberdanlabs/fluxem`
-4. Click **Install** on **FluxEM**, then enable **Start on boot** and **Show in sidebar**.
+4. Find **FluxEM**, click **Install**, and enable **Start on boot**, **Watchdog**, and **Show in sidebar**.
+5. Open FluxEM from your sidebar and enter your Home Assistant credentials in the Configuration tab.
 
 ---
 
-### 🐳 Running with Docker (Pre-built image from GHCR)
+### 🐳 2. Docker CLI / Container
 
-#### Using Docker CLI
 ```bash
 docker run -d \
   --name fluxem \
@@ -67,7 +117,10 @@ docker run -d \
   ghcr.io/timberdanlabs/fluxem:latest
 ```
 
-#### Using Docker Compose (`docker-compose.yml`)
+---
+
+### 🐙 3. Docker Compose (`docker-compose.yml`)
+
 ```yaml
 services:
   fluxem:
@@ -85,27 +138,94 @@ volumes:
 
 ---
 
-### 🐍 Running locally with Virtualenv
+### 🐍 4. Local Development (Virtualenv)
+
 ```bash
+git clone https://github.com/timberdanlabs/fluxem.git
+cd fluxem
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Run the FastAPI service
+# Run test suite (70 tests)
+pytest
+
+# Launch FastAPI microservice
 uvicorn fluxem.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ---
 
-## 📡 API Endpoints
+## 🤖 Home Assistant Automation Examples
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/ui` | Interactive WebUI dashboard & configuration page |
-| `GET` | `/health` | Service health and uptime check |
-| `GET` | `/api/v1/config` | View active configuration and thresholds |
-| `POST` | `/api/v1/ha/test-connection` | Verify Home Assistant URL and Long-Lived Token |
-| `POST` | `/api/v1/ha/sync-and-optimize` | Pull live sensors from HA & execute optimization |
-| `POST` | `/api/v1/optimize` | Execute optimization, watchdog evaluation, and schedule generation |
-| `POST` | `/api/v1/webhook` | Direct webhook trigger for Home Assistant automations |
+### 1. 30-Minute Battery Grid Pre-Charging Controller
+Automate battery grid charging safely using 30-minute hardware timeouts aligned with wholesale market intervals:
+
+```yaml
+alias: "FluxEM: 30-Min Battery Grid Pre-Charge Controller"
+description: "Checks every 30 minutes if FluxEM requests grid pre-charging and triggers a 30-minute charge block."
+mode: restart
+trigger:
+  - platform: time_pattern
+    minutes: "/30"
+    seconds: "10"
+  - platform: numeric_state
+    entity_id: sensor.fluxem_battery_target_power
+    above: 500
+
+condition:
+  - condition: numeric_state
+    entity_id: sensor.fluxem_battery_target_power
+    above: 500
+
+action:
+  - service: <YOUR_INVERTER_SERVICE_OR_SWITCH>
+    data:
+      # e.g., duration: 30, power: 5000, or charge switch entity
+```
+
+### 2. Regular 30-Minute Sync & Optimization Trigger
+```yaml
+alias: "FluxEM: Periodic Sync & Optimization"
+description: "Triggers FluxEM to ingest live sensor updates every 30 minutes."
+mode: single
+trigger:
+  - platform: time_pattern
+    minutes: "/30"
+    seconds: "02"
+action:
+  - service: rest_command.fluxem_sync_and_optimize
+```
+*Add to `configuration.yaml`:*
+```yaml
+rest_command:
+  fluxem_sync_and_optimize:
+    url: "http://<FLUXEM_HOST>:8000/api/v1/ha/sync-and-optimize"
+    method: POST
+```
+
+---
+
+## 📡 REST API Reference
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/ui` | Full interactive WebUI dashboard & configuration interface |
+| `GET` | `/health` | Microservice health, version, and uptime check |
+| `GET` | `/api/v1/ui/dashboard` | Returns active plan, baseline plan of record, adherence KPIs, and telemetry actuals |
+| `GET` | `/api/v1/ui/config` | Retrieves active system, battery, and appliance configurations |
+| `POST` | `/api/v1/ui/config` | Updates and persists system configuration |
+| `POST` | `/api/v1/ha/test-connection` | Validates Home Assistant URL and Access Token connectivity |
+| `POST` | `/api/v1/ha/entities` | Live entity autocomplete search from Home Assistant |
+| `POST` | `/api/v1/ha/sync-and-optimize` | Pulls live sensor states from Home Assistant and solves optimal MPC dispatch |
+| `POST` | `/api/v1/optimize` | Executes raw time-series payload optimization and watchdog evaluation |
+| `POST` | `/api/v1/baseline/lock` | Locks the current schedule as the daily Plan of Record baseline |
+| `POST` | `/api/v1/baseline/reset` | Clears the active baseline lock |
 | `GET` | `/docs` | Interactive OpenAPI Swagger UI documentation |
+
+---
+
+## 📄 License
+
+FluxEM is licensed under the [MIT License](LICENSE). Built with ⚡ for the open-source home energy community.

@@ -1,6 +1,6 @@
 """
 FluxEM: Custom Home Energy Optimization Microservice for Home Assistant.
-FastAPI Web Service, WebUI Dashboard, Home Assistant Direct Sync, and Webhook Endpoints.
+FastAPI Web Service, WebUI Dashboard, Home Assistant Direct Sync, Baseline Telemetry, and Webhook Endpoints.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -10,6 +10,7 @@ from pathlib import Path
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,9 +26,14 @@ from fluxem.models.response import (
     IngestionSummaryResponse,
     OptimizationScheduleResponse,
 )
+from fluxem.models.telemetry import (
+    DashboardDataResponse,
+    PlanAdherenceMetrics,
+    TimestepActual,
+)
 from fluxem.mqtt.publisher import MQTTPublisher
 from fluxem.optimization.engine import OptimizationEngine
-from fluxem.storage import config_store
+from fluxem.storage import config_store, telemetry_store
 from fluxem.ui import render_ui_html
 from fluxem.watchdog.watchdog import DriftWatchdog
 
@@ -203,6 +209,50 @@ async def save_ui_config(data: Dict[str, Any]) -> Dict[str, Any]:
         )
 
 
+@app.get("/api/v1/ui/dashboard", response_model=DashboardDataResponse, tags=["WebUI"])
+async def get_dashboard_data() -> DashboardDataResponse:
+    """
+    Returns aggregated dashboard dataset: local date & time, today's Baseline Plan of Record,
+    active optimized schedule, interval actuals, and plan adherence metrics.
+    """
+    cfg = config_store.config
+    watchdog_status = "nominal"
+    watchdog_reason = ""
+    if drift_watchdog.cached_plan:
+        watchdog_status = "holding_plan"
+        watchdog_reason = "Holding active baseline plan"
+
+    return telemetry_store.get_dashboard_data(
+        ha_timezone=cfg.ha_timezone,
+        horizon_days=cfg.prediction_horizon_days,
+        watchdog_status=watchdog_status,
+        watchdog_reason=watchdog_reason,
+    )
+
+
+@app.post("/api/v1/baseline/lock", tags=["Telemetry & Baseline"])
+async def lock_baseline_plan() -> Dict[str, Any]:
+    """Manually locks today's current optimization schedule as the Baseline Plan of Record."""
+    telemetry_store.lock_baseline_plan()
+    return {
+        "status": "success",
+        "message": "Today's Baseline Plan of Record has been locked successfully.",
+        "is_locked": True,
+    }
+
+
+@app.post("/api/v1/baseline/reset", tags=["Telemetry & Baseline"])
+async def reset_baseline_plan() -> Dict[str, Any]:
+    """Resets today's baseline plan to allow a fresh schedule to be established."""
+    telemetry_store.reset_baseline_plan()
+    drift_watchdog.clear_cache()
+    return {
+        "status": "success",
+        "message": "Today's Baseline Plan of Record has been reset.",
+        "is_locked": False,
+    }
+
+
 # --- Home Assistant Direct Integration Endpoints ---
 
 @app.post("/api/v1/ha/test-connection", tags=["Home Assistant Integration"])
@@ -305,34 +355,62 @@ async def test_mqtt_connection(data: Optional[Dict[str, Any]] = None) -> Dict[st
 
 @app.post("/api/v1/ui/simulate", response_model=OptimizationScheduleResponse, tags=["WebUI"])
 async def simulate_ui_optimization() -> OptimizationScheduleResponse:
-    """Runs a live test simulation with sample weather/pricing and current user config."""
-    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    timestamps = [(now + timedelta(minutes=30 * i)).isoformat() for i in range(24)]
+    """
+    Runs a realistic 48-timestep (midnight-to-midnight) simulation with realistic solar curve,
+    time-of-use pricing tariffs, household loads, and simulated past actuals showing realistic drift.
+    """
+    cfg = config_store.config
+    tz_str = cfg.ha_timezone if cfg.ha_timezone not in ("auto", "none", "") else "UTC"
+    try:
+        tz_obj = ZoneInfo(tz_str)
+    except Exception:
+        tz_obj = timezone.utc
 
-    # Standard realistic price and solar profiles
+    now_local = datetime.now(tz_obj)
+    midnight_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    midnight_utc = midnight_local.astimezone(timezone.utc)
+
+    # 48 intervals (24 hours at 30-minute intervals)
+    target_steps = 48
+    target_dt_list = [midnight_utc + timedelta(minutes=30 * i) for i in range(target_steps)]
+    timestamps = [dt.strftime("%Y-%m-%dT%H:%M:%SZ") for dt in target_dt_list]
+
+    # Realistic 48-step Pricing Curves ($/kWh)
     buy_prices = [
-        0.22, 0.20, 0.18, 0.18, 0.19, 0.21,
-        0.28, 0.35, 0.42, 0.38, 0.25, 0.15,
-        0.10, 0.08, 0.05, 0.08, 0.12, 0.18,
-        0.28, 0.45, 0.52, 0.48, 0.35, 0.25,
+        0.18, 0.18, 0.17, 0.17, 0.17, 0.18, 0.19, 0.22,  # 00:00 - 03:30 (Overnight Off-Peak)
+        0.28, 0.36, 0.44, 0.40, 0.32, 0.24, 0.16, 0.12,  # 04:00 - 07:30 (Morning Peak ramp)
+        0.08, 0.06, 0.04, 0.05, 0.06, 0.08, 0.10, 0.15,  # 08:00 - 11:30 (Solar Valley dip)
+        0.18, 0.22, 0.26, 0.32, 0.38, 0.46, 0.54, 0.58,  # 12:00 - 15:30 (Afternoon -> Evening peak)
+        0.52, 0.48, 0.42, 0.35, 0.28, 0.24, 0.22, 0.20,  # 16:00 - 19:30 (Evening peak wind-down)
+        0.19, 0.18, 0.18, 0.18, 0.18, 0.18, 0.17, 0.17,  # 20:00 - 23:30 (Night)
     ]
+
     sell_prices = [
-        0.06, 0.06, 0.06, 0.06, 0.06, 0.06,
-        0.08, 0.10, 0.12, 0.10, 0.07, 0.04,
-        0.03, 0.02, 0.01, 0.02, 0.04, 0.06,
-        0.10, 0.15, 0.18, 0.15, 0.10, 0.07,
+        0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.06,
+        0.08, 0.10, 0.12, 0.10, 0.08, 0.06, 0.04, 0.03,
+        0.02, 0.01, 0.01, 0.02, 0.03, 0.04, 0.06, 0.08,
+        0.10, 0.12, 0.14, 0.18, 0.22, 0.25, 0.28, 0.26,
+        0.20, 0.16, 0.12, 0.09, 0.07, 0.06, 0.05, 0.05,
+        0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05,
     ]
+
+    # Realistic 48-step Solar Curve (0 at night, peaks ~6400W at 13:00)
     solar_forecast = [
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        50.0, 300.0, 1200.0, 2500.0, 4200.0, 5600.0,
-        6200.0, 6400.0, 5900.0, 4800.0, 3100.0, 1500.0,
-        400.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # 00:00 - 05:30
+        50.0, 250.0, 800.0, 1600.0, 2600.0, 3800.0, 4800.0, 5600.0, # 06:00 - 09:30
+        6200.0, 6500.0, 6600.0, 6400.0, 5900.0, 5100.0, 4100.0, 3000.0, # 10:00 - 13:30
+        1900.0, 950.0, 350.0, 80.0, 0.0, 0.0, 0.0, 0.0,             # 14:00 - 17:30
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # 18:00 - 23:30
     ]
+
+    # Realistic 48-step Household Baseline Load Curve (Watts)
     load_forecast = [
-        450.0, 420.0, 400.0, 390.0, 410.0, 500.0,
-        900.0, 1400.0, 1100.0, 750.0, 600.0, 550.0,
-        500.0, 520.0, 580.0, 650.0, 700.0, 950.0,
-        1600.0, 2100.0, 1900.0, 1300.0, 800.0, 550.0,
+        420.0, 400.0, 390.0, 380.0, 390.0, 410.0, 450.0, 550.0,
+        850.0, 1400.0, 1650.0, 1300.0, 950.0, 750.0, 620.0, 580.0,
+        540.0, 510.0, 500.0, 520.0, 550.0, 580.0, 620.0, 700.0,
+        780.0, 850.0, 920.0, 1100.0, 1350.0, 1700.0, 2100.0, 2400.0,
+        2250.0, 1950.0, 1600.0, 1200.0, 950.0, 750.0, 620.0, 550.0,
+        500.0, 480.0, 450.0, 440.0, 430.0, 420.0, 410.0, 400.0,
     ]
 
     sample_payload = {
@@ -346,7 +424,40 @@ async def simulate_ui_optimization() -> OptimizationScheduleResponse:
     }
 
     context = ingestion_pipeline.ingest(sample_payload)
-    return optimization_engine.optimize(context)
+    response = optimization_engine.optimize(context)
+
+    # Establish as today's Baseline Plan of Record
+    telemetry_store.set_baseline_plan(response, lock=False, tz_name=tz_str)
+    telemetry_store.set_active_schedule(response, tz_name=tz_str)
+
+    # Generate sample actuals for past elapsed intervals up to current local hour
+    current_step_idx = min(47, max(0, (now_local.hour * 60 + now_local.minute) // 30))
+    for idx in range(current_step_idx + 1):
+        ts = timestamps[idx]
+        planned_solar = solar_forecast[idx]
+        planned_load = load_forecast[idx]
+        # Simulate slight realistic cloud dips and load variations
+        cloud_factor = 0.82 if 18 <= idx <= 26 else (0.95 if planned_solar > 0 else 1.0)
+        sim_actual_solar = round(planned_solar * cloud_factor, 1)
+        sim_actual_load = round(planned_load * 1.04, 1)
+        sim_soc = None
+        if response.battery_soc_percent and idx < len(response.battery_soc_percent):
+            # Simulated SOC slightly trailing planned due to cloud cover
+            sim_soc = round(max(10.0, response.battery_soc_percent[idx] - (1.5 if idx > 18 else 0.0)), 1)
+
+        telemetry_store.record_actual(
+            timestamp=ts,
+            solar_power_w=sim_actual_solar,
+            house_power_w=sim_actual_load,
+            baseline_load_w=sim_actual_load,
+            battery_soc_percent=sim_soc,
+            battery_power_w=response.battery_power_w[idx] if response.battery_power_w else None,
+            buy_price=buy_prices[idx],
+            sell_price=sell_prices[idx],
+            tz_name=tz_str,
+        )
+
+    return response
 
 
 @app.post(
@@ -377,6 +488,34 @@ async def ingest_data(payload: HomeAssistantPayload) -> IngestionSummaryResponse
         )
 
 
+def _find_current_timestamp(timestamps: Optional[list[str]]) -> str:
+    """Finds the timestamp corresponding to the current UTC timestep."""
+    if not timestamps:
+        return datetime.now(timezone.utc).isoformat()
+    now_utc = datetime.now(timezone.utc)
+    try:
+        t_first = datetime.fromisoformat(timestamps[0].replace("Z", "+00:00"))
+        t_last = datetime.fromisoformat(timestamps[-1].replace("Z", "+00:00"))
+        if now_utc < t_first:
+            return timestamps[0]
+        if now_utc > t_last + timedelta(minutes=30):
+            return timestamps[0]
+    except Exception:
+        pass
+
+    cur_ts = timestamps[0]
+    for ts in timestamps:
+        try:
+            ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if ts_dt <= now_utc:
+                cur_ts = ts
+            else:
+                break
+        except Exception:
+            continue
+    return cur_ts
+
+
 @app.post(
     "/api/v1/optimize",
     response_model=OptimizationScheduleResponse,
@@ -387,7 +526,11 @@ async def optimize(payload: HomeAssistantPayload) -> OptimizationScheduleRespons
     """
     Main optimization entrypoint. Ingests data, evaluates drift watchdog,
     and produces optimized schedules for deferrable loads and battery storage.
+    Updates baseline telemetry buffer and plan adherence metrics.
     """
+    cfg = config_store.config
+    tz_name = cfg.ha_timezone
+
     try:
         context = ingestion_pipeline.ingest(payload)
     except ValueError as e:
@@ -430,7 +573,21 @@ async def optimize(payload: HomeAssistantPayload) -> OptimizationScheduleRespons
                 "watchdog": watchdog_decision.model_dump(),
             },
         )
-        if settings.mqtt_enabled or config_store.config.mqtt_enabled:
+
+        # Record current interval actuals into telemetry store
+        cur_ts = _find_current_timestamp(response.timestamps)
+        telemetry_store.record_actual(
+            timestamp=cur_ts,
+            solar_power_w=context.actual_sensors.get("solar_power_w"),
+            house_power_w=context.actual_sensors.get("total_house_power_w"),
+            baseline_load_w=context.actual_baseline_load_w,
+            battery_soc_percent=context.battery.soc_percent if context.battery else None,
+            buy_price=context.actual_sensors.get("buy_price"),
+            sell_price=context.actual_sensors.get("sell_price"),
+            tz_name=tz_name,
+        )
+
+        if settings.mqtt_enabled or cfg.mqtt_enabled:
             mqtt_publisher.publish_optimization_result(response)
         return response
 
@@ -447,8 +604,22 @@ async def optimize(payload: HomeAssistantPayload) -> OptimizationScheduleRespons
     response.metadata["watchdog"] = watchdog_decision.model_dump()
     drift_watchdog.update_cached_plan(response)
 
+    # Update active schedule and record current telemetry
+    telemetry_store.set_active_schedule(response, tz_name=tz_name)
+    cur_ts = _find_current_timestamp(response.timestamps)
+    telemetry_store.record_actual(
+        timestamp=cur_ts,
+        solar_power_w=context.actual_sensors.get("solar_power_w"),
+        house_power_w=context.actual_sensors.get("total_house_power_w"),
+        baseline_load_w=context.actual_baseline_load_w,
+        battery_soc_percent=context.battery.soc_percent if context.battery else None,
+        buy_price=context.actual_sensors.get("buy_price"),
+        sell_price=context.actual_sensors.get("sell_price"),
+        tz_name=tz_name,
+    )
+
     # Publish updated schedule to MQTT
-    if settings.mqtt_enabled or config_store.config.mqtt_enabled:
+    if settings.mqtt_enabled or cfg.mqtt_enabled:
         mqtt_publisher.publish_optimization_result(response)
 
     return response

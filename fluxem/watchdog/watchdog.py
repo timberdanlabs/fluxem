@@ -4,7 +4,7 @@ Monitors real-time observed telemetry against forecasted curves and decides whet
 to trigger full re-optimization or hold the baseline plan.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 from typing import Dict, List, Optional
 
@@ -65,6 +65,35 @@ class DriftWatchdog:
         self._cached_plan = None
         self._last_optimized_at = None
 
+    @staticmethod
+    def _find_current_step_index(timestamps: Optional[list[str]], now_utc: Optional[datetime] = None) -> int:
+        """Finds the index of the interval containing the current UTC time."""
+        if not timestamps:
+            return 0
+        if now_utc is None:
+            now_utc = datetime.now(timezone.utc)
+        try:
+            t_first = datetime.fromisoformat(timestamps[0].replace("Z", "+00:00"))
+            t_last = datetime.fromisoformat(timestamps[-1].replace("Z", "+00:00"))
+            if now_utc < t_first:
+                return 0
+            if now_utc > t_last + timedelta(minutes=30):
+                return 0
+        except Exception:
+            pass
+
+        cur_idx = 0
+        for idx, ts in enumerate(timestamps):
+            try:
+                ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                if ts_dt <= now_utc:
+                    cur_idx = idx
+                else:
+                    break
+            except Exception:
+                continue
+        return cur_idx
+
     def evaluate(
         self,
         context: StandardizedEnergyContext,
@@ -106,9 +135,11 @@ class DriftWatchdog:
         metrics: Dict[str, DriftMetric] = {}
         breached_metrics: List[str] = []
 
+        cur_idx = self._find_current_step_index(context.time_series.timestamps_iso)
+
         # --- A. Solar Generation Drift ---
         actual_solar = context.actual_sensors.get("solar_power_w")
-        forecast_solar = context.time_series.solar_powers[0] if context.time_series.solar_powers else 0.0
+        forecast_solar = context.time_series.solar_powers[cur_idx] if cur_idx < len(context.time_series.solar_powers) else 0.0
 
         if actual_solar is not None:
             # If both actual and forecast are negligible (night time / cloud edge < 100W), ignore drift
@@ -135,7 +166,7 @@ class DriftWatchdog:
 
         # --- B. Electricity Buy Price Drift ---
         actual_price = context.actual_sensors.get("buy_price")
-        forecast_price = context.time_series.buy_prices[0] if context.time_series.buy_prices else 0.0
+        forecast_price = context.time_series.buy_prices[cur_idx] if cur_idx < len(context.time_series.buy_prices) else 0.0
 
         if actual_price is not None:
             denom = max(abs(forecast_price), 0.05)
@@ -163,7 +194,7 @@ class DriftWatchdog:
             if context.actual_baseline_load_w is not None
             else context.actual_sensors.get("total_house_power_w")
         )
-        forecast_load = context.time_series.load_powers[0] if context.time_series.load_powers else 0.0
+        forecast_load = context.time_series.load_powers[cur_idx] if cur_idx < len(context.time_series.load_powers) else 0.0
 
         if actual_load is not None:
             denom = max(forecast_load, 300.0)
@@ -187,8 +218,8 @@ class DriftWatchdog:
         # --- D. Battery SOC Drift ---
         if context.battery is not None and self._cached_plan and self._cached_plan.battery_soc_percent:
             actual_soc = context.battery.soc_percent
-            # Align with step 0 of current plan
-            forecast_soc = self._cached_plan.battery_soc_percent[0]
+            # Align with current step of cached baseline plan
+            forecast_soc = self._cached_plan.battery_soc_percent[cur_idx] if cur_idx < len(self._cached_plan.battery_soc_percent) else 0.0
             soc_diff_pct = abs(actual_soc - forecast_soc)
             soc_breached = soc_diff_pct > self.soc_threshold_pct
 

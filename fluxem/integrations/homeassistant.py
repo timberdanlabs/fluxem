@@ -904,13 +904,20 @@ class HomeAssistantClient:
                 resolved_tz = ha_cfg_tz
                 logger.info(f"Auto-detected Home Assistant timezone: {resolved_tz}")
 
-        # Determine canonical start time (current time floored to timestep)
+        # Determine canonical start time (Anchor to midnight 00:00 of current day in local timezone)
+        tz_obj = timezone.utc
+        if resolved_tz and resolved_tz.lower() not in ("auto", "none", ""):
+            try:
+                tz_obj = ZoneInfo(resolved_tz)
+            except Exception:
+                tz_obj = timezone.utc
+
         if start_time is not None:
             start_utc = _parse_utc_dt(start_time, ha_timezone=resolved_tz) or datetime.now(timezone.utc).replace(second=0, microsecond=0)
         else:
-            now_utc = datetime.now(timezone.utc)
-            now_minute = (now_utc.minute // timestep_minutes) * timestep_minutes
-            start_utc = now_utc.replace(minute=now_minute, second=0, microsecond=0)
+            now_local = datetime.now(tz_obj)
+            today_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            start_utc = today_start_local.astimezone(timezone.utc)
 
         # Generate target timestamp sequence
         target_dt_list = [start_utc + timedelta(minutes=step * timestep_minutes) for step in range(target_steps)]

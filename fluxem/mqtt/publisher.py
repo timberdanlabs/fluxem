@@ -175,16 +175,46 @@ class MQTTPublisher:
         if self.enabled:
             self.connect()
 
+    @staticmethod
+    def _find_current_step_index(timestamps: list[str]) -> int:
+        """Finds the index of the interval containing the current UTC time."""
+        if not timestamps:
+            return 0
+        from datetime import datetime, timezone, timedelta
+        now_utc = datetime.now(timezone.utc)
+        try:
+            t_first = datetime.fromisoformat(timestamps[0].replace("Z", "+00:00"))
+            t_last = datetime.fromisoformat(timestamps[-1].replace("Z", "+00:00"))
+            if now_utc < t_first:
+                return 0
+            if now_utc > t_last + timedelta(minutes=30):
+                return 0
+        except Exception:
+            pass
+
+        cur_idx = 0
+        for idx, ts in enumerate(timestamps):
+            try:
+                ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                if ts_dt <= now_utc:
+                    cur_idx = idx
+                else:
+                    break
+            except Exception:
+                continue
+        return cur_idx
+
     def publish_optimization_result(self, result: OptimizationScheduleResponse) -> bool:
         """
-        Publishes optimized curves, step 0 real-time controls, full forecast attributes,
-        and Home Assistant MQTT Discovery payloads.
+        Publishes optimized curves, real-time controls for the current timestep (NOW),
+        full forecast attributes, and Home Assistant MQTT Discovery payloads.
         """
         if not self.enabled or not self.client or not self._is_connected:
             return False
 
         try:
             p = self.topic_prefix
+            cur_idx = self._find_current_step_index(result.timestamps)
 
             # 1. Summary & Watchdog Status
             self._publish(f"{p}/status", "online", retain=True)
@@ -193,7 +223,7 @@ class MQTTPublisher:
 
             # 2. Deferrable Loads Curves & Immediate Switch States
             for load_id, power_curve in result.deferrable_load_power_w.items():
-                current_power = power_curve[0] if power_curve else 0.0
+                current_power = power_curve[cur_idx] if power_curve and cur_idx < len(power_curve) else 0.0
                 switch_state = "ON" if current_power > 10.0 else "OFF"
 
                 # Publish schedule array and JSON attributes for HA graphs / apexcharts
@@ -211,23 +241,25 @@ class MQTTPublisher:
 
             # 3. Battery Schedules & Setpoints
             if result.battery_power_w:
-                current_batt_w = result.battery_power_w[0]
+                current_batt_w = result.battery_power_w[cur_idx] if cur_idx < len(result.battery_power_w) else 0.0
                 self._publish(f"{p}/battery/power_curve", json.dumps(result.battery_power_w), retain=True)
                 self._publish(f"{p}/battery/current_power_setpoint_w", str(round(current_batt_w, 1)), retain=True)
 
             if result.battery_soc_percent:
-                current_soc = result.battery_soc_percent[0]
+                current_soc = result.battery_soc_percent[cur_idx] if cur_idx < len(result.battery_soc_percent) else 0.0
                 self._publish(f"{p}/battery/soc_curve", json.dumps(result.battery_soc_percent), retain=True)
                 self._publish(f"{p}/battery/projected_soc", str(round(current_soc, 1)), retain=True)
 
             # 4. Grid Import / Export Power Curves
             if result.grid_import_power_w:
+                current_import_w = result.grid_import_power_w[cur_idx] if cur_idx < len(result.grid_import_power_w) else 0.0
                 self._publish(f"{p}/grid/import_power_curve", json.dumps(result.grid_import_power_w), retain=True)
-                self._publish(f"{p}/grid/current_import_setpoint_w", str(round(result.grid_import_power_w[0], 1)), retain=True)
+                self._publish(f"{p}/grid/current_import_setpoint_w", str(round(current_import_w, 1)), retain=True)
 
             if result.grid_export_power_w:
+                current_export_w = result.grid_export_power_w[cur_idx] if cur_idx < len(result.grid_export_power_w) else 0.0
                 self._publish(f"{p}/grid/export_power_curve", json.dumps(result.grid_export_power_w), retain=True)
-                self._publish(f"{p}/grid/current_export_setpoint_w", str(round(result.grid_export_power_w[0], 1)), retain=True)
+                self._publish(f"{p}/grid/current_export_setpoint_w", str(round(current_export_w, 1)), retain=True)
 
             # 5. Full Schedule Forecast Attributes (for Lovelace ApexCharts)
             forecast_attrs = {

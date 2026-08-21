@@ -4,7 +4,7 @@ Implements continuous unbroken block scheduling, flexible multi-window cluster s
 with max-start constraints, priority-based solar stacking, and state-aware mid-cycle tracking.
 r"""
 
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 import logging
 import math
 from typing import Any, Dict, List, Optional, Tuple
@@ -199,7 +199,32 @@ class DeferrableLoadScheduler:
                 continue
 
             # Check base time window validity within this day
-            day_valid_mask = [valid_mask[i] for i in day_indices]
+            now_utc = datetime.now(timezone.utc)
+            is_live_day0 = False
+            if len(time_series.timestamps) > 0:
+                try:
+                    t_first = time_series.timestamps[0]
+                    t_last = time_series.timestamps[-1]
+                    if t_first.tzinfo is None:
+                        t_first = t_first.replace(tzinfo=timezone.utc)
+                    if t_last.tzinfo is None:
+                        t_last = t_last.replace(tzinfo=timezone.utc)
+                    if t_first <= now_utc <= t_last + timedelta(minutes=30):
+                        is_live_day0 = True
+                except Exception:
+                    pass
+
+            day_valid_mask = []
+            for i in day_indices:
+                ts = time_series.timestamps[i]
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                # If Day 0 (today) in live operations, past elapsed intervals cannot be scheduled for future work
+                if day_idx == 0 and is_live_day0 and ts < now_utc - timedelta(minutes=15):
+                    day_valid_mask.append(False)
+                else:
+                    day_valid_mask.append(valid_mask[i])
+
             valid_in_day = [i for i, v in enumerate(day_valid_mask) if v]
             if not valid_in_day:
                 warnings.append(
@@ -421,12 +446,17 @@ class DeferrableLoadScheduler:
 
         # Case A: Load is currently running mid-cycle
         if load.is_running:
-            # Must continue uninterrupted from step 0
-            end_idx = min(total_steps, steps_needed)
-            chosen = list(range(0, end_idx))
+            # Must continue uninterrupted from the active start step
+            start_step = 0
+            for i, v in enumerate(valid_mask):
+                if v:
+                    start_step = i
+                    break
+            end_idx = min(total_steps, start_step + steps_needed)
+            chosen = list(range(start_step, end_idx))
             warnings.append(
                 f"Continuous load '{load.id}' is actively running. Enforcing contiguous block "
-                f"from step 0 for {len(chosen)} steps ({len(chosen) * 0.5:.1f}h) to preserve mid-cycle state."
+                f"from step {start_step} for {len(chosen)} steps ({len(chosen) * 0.5:.1f}h) to preserve mid-cycle state."
             )
             return chosen, warnings
 
