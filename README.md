@@ -8,6 +8,17 @@
 **FluxEM** is a modern, lightweight, and self-hosted Model Predictive Control (MPC) energy optimization microservice engineered for **[Home Assistant](https://www.home-assistant.io/)**. It delivers predictable, transparent, and intelligent energy dispatch without the heavy solver dependencies, brittle mathematical constraints, or complex YAML overhead of traditional tools.
 
 ---
+## Screnshots
+
+<img width="1306" height="165" alt="image" src="https://github.com/user-attachments/assets/890a8949-de09-4b40-9ed8-fbc38599116e" />
+<img width="1240" height="662" alt="image" src="https://github.com/user-attachments/assets/bd133c7b-ac5c-4da1-908c-9847228e6a1c" />
+
+<img width="1252" height="505" alt="image" src="https://github.com/user-attachments/assets/5c5d0cd3-e48a-4d3a-8367-85879f691998" />
+
+<img width="1054" height="744" alt="image" src="https://github.com/user-attachments/assets/b6d5f71b-abfb-4b34-b52f-f6acf161320b" />
+
+
+---
 
 ## 🌟 What's New in FluxEM v2.0
 
