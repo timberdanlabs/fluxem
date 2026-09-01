@@ -1,6 +1,6 @@
 name: "FluxEM"
 slug: "fluxem"
-version: "2.0.0"
+version: "2.1.0"
 description: "Lightweight home energy management, smart battery arbitrage, and deferrable load scheduling microservice."
 url: "https://github.com/timberdanlabs/fluxem"
 arch:

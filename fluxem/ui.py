@@ -421,12 +421,18 @@ HTML_TEMPLATE = """
                 <div class="font-semibold text-white text-sm flex items-center gap-2">
                   <span x-text="load.name || load.id"></span>
                   <span class="text-[10px] px-2 py-0.5 rounded font-mono uppercase"
-                        :class="load.critical ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-teal-500/10 text-teal-400 border border-teal-500/20'"
-                        x-text="load.critical ? 'Critical' : 'Opportunistic'">
+                        :class="load.dynamic_solar_quota ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : (load.critical ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-teal-500/10 text-teal-400 border border-teal-500/20')"
+                        x-text="load.dynamic_solar_quota ? 'Dynamic Solar' : (load.critical ? 'Critical' : 'Opportunistic')">
                   </span>
                 </div>
                 <div class="text-xs text-slate-400 mt-1">
-                  Power: <span class="text-slate-200 font-mono" x-text="load.nominal_power_w + ' W'"></span> | Req: <span class="text-slate-200 font-mono" x-text="load.required_hours + 'h'"></span>
+                  Power: <span class="text-slate-200 font-mono" x-text="load.nominal_power_w + ' W'"></span> | 
+                  <template x-if="load.dynamic_solar_quota">
+                    <span>Req: <span class="text-amber-300 font-mono" x-text="load.max_daily_hours ? ('Up to ' + load.max_daily_hours + 'h') : 'All Sun'"></span></span>
+                  </template>
+                  <template x-if="!load.dynamic_solar_quota">
+                    <span>Req: <span class="text-slate-200 font-mono" x-text="(load.required_hours || 0) + 'h'"></span></span>
+                  </template>
                 </div>
               </div>
               <div>
@@ -440,7 +446,10 @@ HTML_TEMPLATE = """
             <div class="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400 font-mono">
               <div>
                 Mode: <span class="text-slate-300" x-text="load.continuous ? 'Continuous' : 'Flexible'"></span>
-                <template x-if="load.solar_only">
+                <template x-if="load.dynamic_solar_quota">
+                  <span class="ml-1 text-amber-400">☀️ Solar Tracking</span>
+                </template>
+                <template x-if="load.solar_only && !load.dynamic_solar_quota">
                   <span class="ml-1 text-amber-400">☀️ Solar Only</span>
                 </template>
               </div>
@@ -740,8 +749,30 @@ HTML_TEMPLATE = """
                       <input type="number" x-model.number="load.nominal_power_w" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white font-mono focus:border-emerald-500 focus:outline-none">
                     </div>
                     <div>
-                      <label class="block text-slate-400 mb-1">Required Hours (h)</label>
-                      <input type="number" step="0.5" x-model.number="load.required_hours" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white font-mono focus:border-emerald-500 focus:outline-none">
+                      <label class="block text-slate-400 mb-1" x-text="load.dynamic_solar_quota ? 'Max Daily Hours (h)' : 'Required Hours (h)'"></label>
+                      <input type="number" step="0.5" 
+                             :placeholder="load.dynamic_solar_quota ? 'No limit (all sun)' : '3.0'"
+                             x-model.number="load.dynamic_solar_quota ? load.max_daily_hours : load.required_hours" 
+                             class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white font-mono focus:border-emerald-500 focus:outline-none">
+                    </div>
+                    <div>
+                      <label class="block text-slate-400 mb-1">Min Gross Solar (W)</label>
+                      <input type="number" step="100" x-model.number="load.min_solar_power_w" placeholder="e.g. 2500 (roof heat)" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white font-mono focus:border-emerald-500 focus:outline-none">
+                    </div>
+                    <div>
+                      <label class="block text-slate-400 mb-1">Min Run Block (min)</label>
+                      <input type="number" step="5" x-model.number="load.min_run_time_minutes" placeholder="e.g. 30 (anti-cycle)" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white font-mono focus:border-emerald-500 focus:outline-none">
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div>
+                      <label class="block text-slate-400 mb-1">Window Start (HH:MM)</label>
+                      <input type="text" x-model="load.window_start_time" placeholder="e.g. 10:00" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white font-mono focus:border-emerald-500 focus:outline-none">
+                    </div>
+                    <div>
+                      <label class="block text-slate-400 mb-1">Window End (HH:MM)</label>
+                      <input type="text" x-model="load.window_end_time" placeholder="e.g. 16:00" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-white font-mono focus:border-emerald-500 focus:outline-none">
                     </div>
                     <div>
                       <label class="block text-slate-400 mb-1">Max Skip Days</label>
@@ -756,6 +787,12 @@ HTML_TEMPLATE = """
                   <!-- Toggles -->
                   <div class="flex flex-wrap gap-4 text-xs pt-1">
                     <label class="flex items-center space-x-2 cursor-pointer">
+                      <input type="checkbox" x-model="load.dynamic_solar_quota" 
+                             @change="if(load.dynamic_solar_quota) { load.critical = false; load.solar_only = true; }"
+                             class="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-0">
+                      <span class="text-amber-300 font-medium">☀️ Dynamic Solar Tracking (Sun-Seeking)</span>
+                    </label>
+                    <label class="flex items-center space-x-2 cursor-pointer" x-show="!load.dynamic_solar_quota">
                       <input type="checkbox" x-model="load.critical" class="rounded bg-slate-900 border-slate-700 text-emerald-500 focus:ring-0">
                       <span class="text-slate-300">Critical / Mandatory Daily Run</span>
                     </label>
@@ -763,7 +800,7 @@ HTML_TEMPLATE = """
                       <input type="checkbox" x-model="load.continuous" class="rounded bg-slate-900 border-slate-700 text-emerald-500 focus:ring-0">
                       <span class="text-slate-300">Continuous (Unbroken Cycle)</span>
                     </label>
-                    <label class="flex items-center space-x-2 cursor-pointer">
+                    <label class="flex items-center space-x-2 cursor-pointer" x-show="!load.dynamic_solar_quota">
                       <input type="checkbox" x-model="load.solar_only" class="rounded bg-slate-900 border-slate-700 text-emerald-500 focus:ring-0">
                       <span class="text-slate-300">Solar-Only Mode</span>
                     </label>
@@ -1395,6 +1432,12 @@ HTML_TEMPLATE = """
             consecutive_days_skipped: 0,
             max_buy_price: null,
             solar_only: false,
+            dynamic_solar_quota: false,
+            max_daily_hours: null,
+            min_solar_power_w: null,
+            min_run_time_minutes: null,
+            window_start_time: null,
+            window_end_time: null,
             complete_on_cutoff: false,
             is_running: false,
             is_included_in_total_load: true,

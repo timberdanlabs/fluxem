@@ -176,17 +176,36 @@ class DeferrableLoadScheduler:
                     consecutive_skips = 0
                     continue
 
-                remaining_hours = max(0.0, load.required_hours - load.accumulated_hours_today)
+                if load.dynamic_solar_quota:
+                    if load.max_daily_hours is not None:
+                        remaining_hours = max(0.0, load.max_daily_hours - load.accumulated_hours_today)
+                        if remaining_hours <= 1e-5:
+                            warnings.append(
+                                f"Dynamic solar load '{load.id}' ({load.name}) already completed max daily limit "
+                                f"({load.accumulated_hours_today:.1f}h / {load.max_daily_hours:.1f}h)."
+                            )
+                            consecutive_skips = 0
+                            continue
+                    else:
+                        remaining_hours = day_total_steps * dt_hours
+                else:
+                    remaining_hours = max(0.0, load.required_hours - load.accumulated_hours_today)
+                    if remaining_hours <= 1e-5:
+                        warnings.append(
+                            f"Load '{load.id}' ({load.name}) already completed required runtime today "
+                            f"({load.accumulated_hours_today:.1f}h / {load.required_hours:.1f}h)."
+                        )
+                        consecutive_skips = 0
+                        continue
                 is_running = load.is_running
-                if remaining_hours <= 1e-5:
-                    warnings.append(
-                        f"Load '{load.id}' ({load.name}) already completed required runtime today "
-                        f"({load.accumulated_hours_today:.1f}h / {load.required_hours:.1f}h)."
-                    )
-                    consecutive_skips = 0
-                    continue
             else:
-                remaining_hours = load.required_hours
+                if load.dynamic_solar_quota:
+                    if load.max_daily_hours is not None:
+                        remaining_hours = load.max_daily_hours
+                    else:
+                        remaining_hours = day_total_steps * dt_hours
+                else:
+                    remaining_hours = load.required_hours
                 is_running = False
 
             # Steps needed for this day
@@ -238,7 +257,7 @@ class DeferrableLoadScheduler:
             is_mandatory = (
                 load.critical is True
                 or (load.max_skip_days is not None and consecutive_skips >= load.max_skip_days)
-                or (day_idx == 0 and is_running)
+                or (day_idx == 0 and is_running and not load.dynamic_solar_quota)
             )
 
             day_step_costs = [step_costs[i] for i in day_indices]
@@ -290,7 +309,7 @@ class DeferrableLoadScheduler:
 
             else:
                 # Opportunistic / Non-Critical Scheduling
-                # Build opportunistic mask based on excess solar and price threshold
+                # Build opportunistic mask based on excess solar, gross solar threshold, and price threshold
                 opp_mask: List[bool] = []
                 for r in range(day_total_steps):
                     if not day_valid_mask[r]:
@@ -299,9 +318,16 @@ class DeferrableLoadScheduler:
 
                     global_i = day_indices[r]
                     solar_w = available_excess_solar[global_i]
+                    gross_solar_w = time_series.solar_powers[global_i]
                     buy_p = time_series.buy_prices[global_i]
 
-                    if load.solar_only:
+                    # Check gross solar floor (e.g. ensuring solar roof collectors are hot)
+                    if load.min_solar_power_w is not None and gross_solar_w < (load.min_solar_power_w * 0.95):
+                        opp_mask.append(False)
+                        continue
+
+                    # Check net surplus or max buy price
+                    if load.solar_only or load.dynamic_solar_quota:
                         has_solar = solar_w >= (load.nominal_power_w * 0.95)
                         opp_mask.append(has_solar)
                     else:
@@ -312,10 +338,76 @@ class DeferrableLoadScheduler:
                         else:
                             opp_mask.append(True)
 
+                # Anti-short-cycling: filter out runs shorter than min_run_time_minutes
+                if load.min_run_time_minutes and load.min_run_time_minutes > 0:
+                    min_block_steps = max(1, int(math.ceil(load.min_run_time_minutes / (dt_hours * 60.0))))
+                    if min_block_steps > 1:
+                        opp_mask = cls._filter_short_runs(
+                            opp_mask,
+                            min_block_steps,
+                            is_active_at_start=(day_idx == 0 and is_running),
+                        )
+
                 opp_candidates = [i for i, v in enumerate(opp_mask) if v]
                 max_skip_str = f"/{load.max_skip_days}" if load.max_skip_days is not None else ""
 
-                if load.continuous:
+                if load.dynamic_solar_quota:
+                    # Dynamic Solar Tracking Mode: schedule all qualifying surplus intervals up to max_daily_hours
+                    if not opp_candidates:
+                        consecutive_skips += 1
+                        reasons = []
+                        if load.min_solar_power_w is not None:
+                            reasons.append(f"gross solar >= {load.min_solar_power_w:.0f}W")
+                        reasons.append(f"surplus solar >= {load.nominal_power_w:.0f}W")
+                        warnings.append(
+                            f"Dynamic solar load '{load.id}' ({load.name}) deferred on Day {day_idx + 1}: "
+                            f"no qualifying solar intervals ({' and '.join(reasons)})."
+                        )
+                    else:
+                        if load.max_daily_hours is not None:
+                            max_steps_allowed = int(math.floor((remaining_hours / dt_hours) + 1e-5))
+                            eff_steps = min(len(opp_candidates), max_steps_allowed)
+                        else:
+                            eff_steps = len(opp_candidates)
+
+                        if eff_steps >= len(opp_candidates):
+                            for rel_idx in opp_candidates:
+                                schedule[day_indices[rel_idx]] = float(load.nominal_power_w)
+                            consecutive_skips = 0
+                            warnings.append(
+                                f"Dynamic solar load '{load.id}' ({load.name}) scheduled {len(opp_candidates) * dt_hours:.1f}h "
+                                f"of solar tracking across all qualifying intervals on Day {day_idx + 1}."
+                            )
+                        else:
+                            # Capped by max_daily_hours limit: select best intervals
+                            if load.continuous:
+                                chosen_rel, cont_warnings = cls._schedule_continuous_block(
+                                    load=day_load,
+                                    steps_needed=eff_steps,
+                                    step_costs=day_step_costs,
+                                    valid_mask=opp_mask,
+                                    total_steps=day_total_steps,
+                                )
+                                warnings.extend(cont_warnings)
+                            else:
+                                chosen_rel, flex_warnings = cls._schedule_flexible_clusters(
+                                    load=day_load,
+                                    steps_needed=eff_steps,
+                                    step_costs=day_step_costs,
+                                    valid_mask=opp_mask,
+                                    total_steps=day_total_steps,
+                                )
+                                warnings.extend(flex_warnings)
+
+                            for rel_idx in chosen_rel:
+                                schedule[day_indices[rel_idx]] = float(load.nominal_power_w)
+                            consecutive_skips = 0
+                            warnings.append(
+                                f"Dynamic solar load '{load.id}' ({load.name}) scheduled {len(chosen_rel) * dt_hours:.1f}h "
+                                f"(capped at {load.max_daily_hours:.1f}h max limit) on Day {day_idx + 1}."
+                            )
+
+                elif load.continuous:
                     # Check if a full unbroken block of length steps_needed exists within opp_mask
                     has_continuous_candidate = False
                     for start_r in range(0, day_total_steps - steps_needed + 1):
@@ -707,3 +799,34 @@ class DeferrableLoadScheduler:
         except Exception:
             logger.warning(f"Could not parse window time string '{time_str}'. Ignoring constraint.")
             return None
+
+    @classmethod
+    def _filter_short_runs(
+        cls,
+        mask: List[bool],
+        min_steps: int,
+        is_active_at_start: bool = False,
+    ) -> List[bool]:
+        r"""
+        Filters out contiguous True segments that are shorter than min_steps (anti-short-cycling),
+        preserving active mid-cycle runs at the start if applicable.
+        r"""
+        result = list(mask)
+        n = len(mask)
+        i = 0
+        while i < n:
+            if result[i]:
+                start = i
+                while i < n and result[i]:
+                    i += 1
+                length = i - start
+                if length < min_steps:
+                    if start == 0 and is_active_at_start:
+                        pass
+                    else:
+                        for k in range(start, i):
+                            result[k] = False
+            else:
+                i += 1
+        return result
+

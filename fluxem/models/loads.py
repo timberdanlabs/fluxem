@@ -117,6 +117,29 @@ class DeferrableLoad(BaseModel):
         description="If True, the load will strictly only run when surplus solar power is available (no grid import)",
         examples=[False],
     )
+    min_solar_power_w: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Minimum gross solar power generation (Watts) required to run (e.g. to ensure solar roof collectors are hot)",
+        examples=[2500.0],
+    )
+    dynamic_solar_quota: bool = Field(
+        default=False,
+        description="If True, dynamically schedules all available qualifying solar surplus intervals (up to optional max_daily_hours) instead of requiring a fixed required_hours quota",
+        examples=[True],
+    )
+    max_daily_hours: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Optional maximum operating hours per day when dynamic_solar_quota is enabled (None = unlimited sun-tracking)",
+        examples=[6.0],
+    )
+    min_run_time_minutes: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Minimum duration in minutes for any scheduled continuous run block (anti-short-cycling)",
+        examples=[30],
+    )
     complete_on_cutoff: bool = Field(
         default=False,
         description="If True, automatically marks today's requirement as satisfied when power consumption drops to 0W (idle) after an active heating cycle (e.g. water heater thermostat satisfied)",
@@ -140,14 +163,23 @@ class DeferrableLoad(BaseModel):
 
     @model_validator(mode="after")
     def validate_requirements(self) -> "DeferrableLoad":
-        # Resolve required_hours and required_kwh
-        if self.required_hours is None and self.required_kwh is None:
-            raise ValueError(f"Load '{self.id}' must specify either 'required_hours' or 'required_kwh'")
+        # Handle dynamic_solar_quota
+        if self.dynamic_solar_quota:
+            if "critical" in self.model_fields_set and self.critical:
+                raise ValueError(f"Load '{self.id}' cannot have both 'critical: true' (mandatory grid run) and 'dynamic_solar_quota: true'.")
+            self.critical = False
+            self.solar_only = True
+            if self.required_hours is None and self.max_daily_hours is not None:
+                self.required_hours = self.max_daily_hours
+        else:
+            # Resolve required_hours and required_kwh for standard quota loads
+            if self.required_hours is None and self.required_kwh is None:
+                raise ValueError(f"Load '{self.id}' must specify either 'required_hours' or 'required_kwh'")
 
-        if self.required_hours is None and self.required_kwh is not None:
-            self.required_hours = self.required_kwh / (self.nominal_power_w / 1000.0)
-        elif self.required_kwh is None and self.required_hours is not None:
-            self.required_kwh = self.required_hours * (self.nominal_power_w / 1000.0)
+            if self.required_hours is None and self.required_kwh is not None:
+                self.required_hours = self.required_kwh / (self.nominal_power_w / 1000.0)
+            elif self.required_kwh is None and self.required_hours is not None:
+                self.required_kwh = self.required_hours * (self.nominal_power_w / 1000.0)
 
         # Handle solar_only and critical interactions
         if self.solar_only:
@@ -181,6 +213,10 @@ class DeferrableLoad(BaseModel):
         """Operating hours still needed today after accounting for accumulated runtime or cycle completion."""
         if self.is_cycle_completed_today:
             return 0.0
+        if self.dynamic_solar_quota:
+            if self.max_daily_hours is not None:
+                return max(0.0, self.max_daily_hours - self.accumulated_hours_today)
+            return 0.0
         if self.required_hours is None:
             return 0.0
         return max(0.0, self.required_hours - self.accumulated_hours_today)
@@ -193,4 +229,10 @@ class DeferrableLoad(BaseModel):
     @property
     def is_satisfied(self) -> bool:
         """True if the daily requirement has already been satisfied."""
-        return self.is_cycle_completed_today or self.remaining_hours_needed <= 1e-6
+        if self.is_cycle_completed_today:
+            return True
+        if self.dynamic_solar_quota:
+            if self.max_daily_hours is not None:
+                return self.accumulated_hours_today >= (self.max_daily_hours - 1e-6)
+            return False
+        return self.remaining_hours_needed <= 1e-6
