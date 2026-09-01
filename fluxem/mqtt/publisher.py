@@ -250,7 +250,7 @@ class MQTTPublisher:
                 self._publish(f"{p}/battery/soc_curve", json.dumps(result.battery_soc_percent), retain=True)
                 self._publish(f"{p}/battery/projected_soc", str(round(current_soc, 1)), retain=True)
 
-            # 4. Grid Import / Export Power Curves
+            # 4. Grid Import / Export / Precharge Power Curves
             if result.grid_import_power_w:
                 current_import_w = result.grid_import_power_w[cur_idx] if cur_idx < len(result.grid_import_power_w) else 0.0
                 self._publish(f"{p}/grid/import_power_curve", json.dumps(result.grid_import_power_w), retain=True)
@@ -260,6 +260,18 @@ class MQTTPublisher:
                 current_export_w = result.grid_export_power_w[cur_idx] if cur_idx < len(result.grid_export_power_w) else 0.0
                 self._publish(f"{p}/grid/export_power_curve", json.dumps(result.grid_export_power_w), retain=True)
                 self._publish(f"{p}/grid/current_export_setpoint_w", str(round(current_export_w, 1)), retain=True)
+
+            # Dedicated Battery Grid Pre-Charge (ONLY active when FluxEM explicitly requests charging battery from grid)
+            if result.grid_precharge_power_w:
+                current_precharge_w = result.grid_precharge_power_w[cur_idx] if cur_idx < len(result.grid_precharge_power_w) else 0.0
+                self._publish(f"{p}/battery/grid_precharge_curve", json.dumps(result.grid_precharge_power_w), retain=True)
+                self._publish(f"{p}/battery/grid_precharge_setpoint_w", str(round(current_precharge_w, 1)), retain=True)
+
+            # Dedicated Wholesale Arbitrage Export (ONLY active when FluxEM explicitly requests battery export to grid)
+            if result.arbitrage_export_power_w:
+                current_arb_export_w = result.arbitrage_export_power_w[cur_idx] if cur_idx < len(result.arbitrage_export_power_w) else 0.0
+                self._publish(f"{p}/battery/arbitrage_export_curve", json.dumps(result.arbitrage_export_power_w), retain=True)
+                self._publish(f"{p}/battery/arbitrage_export_setpoint_w", str(round(current_arb_export_w, 1)), retain=True)
 
             # 5. Full Schedule Forecast Attributes (for Lovelace ApexCharts)
             forecast_attrs = {
@@ -272,6 +284,8 @@ class MQTTPublisher:
                 "battery_soc_percent": result.battery_soc_percent,
                 "grid_import_power_w": result.grid_import_power_w,
                 "grid_export_power_w": result.grid_export_power_w,
+                "grid_precharge_power_w": result.grid_precharge_power_w,
+                "arbitrage_export_power_w": result.arbitrage_export_power_w,
                 "deferrable_load_power_w": result.deferrable_load_power_w,
                 "updated_at": result.summary.start_time,
             }
@@ -355,7 +369,37 @@ class MQTTPublisher:
                 retain=True,
             )
 
-            # 4. Grid Import Target Sensor
+            # 4. Battery Dedicated Grid Pre-Charge Target Sensor (ONLY non-zero for forced grid charging)
+            self._publish(
+                f"homeassistant/sensor/{p}/battery_grid_precharge_target/config",
+                json.dumps({
+                    "name": "FluxEM Battery Grid Precharge Target",
+                    "state_topic": f"{p}/battery/grid_precharge_setpoint_w",
+                    "unit_of_measurement": "W",
+                    "device_class": "power",
+                    "unique_id": f"{p}_battery_grid_precharge_target",
+                    "icon": "mdi:battery-arrow-up-outline",
+                    "device": device_info,
+                }),
+                retain=True,
+            )
+
+            # 5. Battery Dedicated Wholesale Arbitrage Export Target Sensor
+            self._publish(
+                f"homeassistant/sensor/{p}/battery_arbitrage_export_target/config",
+                json.dumps({
+                    "name": "FluxEM Battery Arbitrage Export Target",
+                    "state_topic": f"{p}/battery/arbitrage_export_setpoint_w",
+                    "unit_of_measurement": "W",
+                    "device_class": "power",
+                    "unique_id": f"{p}_battery_arbitrage_export_target",
+                    "icon": "mdi:battery-arrow-down-outline",
+                    "device": device_info,
+                }),
+                retain=True,
+            )
+
+            # 6. Grid Import Target Sensor (Total Household Import)
             self._publish(
                 f"homeassistant/sensor/{p}/grid_import_target/config",
                 json.dumps({
@@ -370,7 +414,7 @@ class MQTTPublisher:
                 retain=True,
             )
 
-            # 5. Grid Export Target Sensor
+            # 7. Grid Export Target Sensor (Total Household Export)
             self._publish(
                 f"homeassistant/sensor/{p}/grid_export_target/config",
                 json.dumps({

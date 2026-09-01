@@ -182,12 +182,12 @@ trigger:
     minutes: "/30"
     seconds: "10"
   - platform: numeric_state
-    entity_id: sensor.fluxem_battery_target_power
+    entity_id: sensor.fluxem_battery_grid_precharge_target
     above: 500
 
 condition:
   - condition: numeric_state
-    entity_id: sensor.fluxem_battery_target_power
+    entity_id: sensor.fluxem_battery_grid_precharge_target
     above: 500
 
 action:

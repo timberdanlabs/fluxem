@@ -71,5 +71,13 @@ class OptimizationScheduleResponse(BaseModel):
         default=None,
         description="Projected grid export power in Watts",
     )
+    grid_precharge_power_w: Optional[List[float]] = Field(
+        default=None,
+        description="Dedicated grid pre-charging power curve in Watts (battery force-charging from grid)",
+    )
+    arbitrage_export_power_w: Optional[List[float]] = Field(
+        default=None,
+        description="Dedicated wholesale feed-in arbitrage export power curve in Watts (battery force-discharging to grid)",
+    )
     summary: IngestionSummaryResponse = Field(..., description="Summary of input context")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional optimization metadata")

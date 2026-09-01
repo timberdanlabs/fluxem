@@ -132,6 +132,9 @@ class OptimizationEngine:
         summary_response = context.to_summary_response()
         summary_response.warnings = all_warnings
 
+        grid_precharge_curve: List[float] = battery_result.grid_precharge_power_w if context.battery is not None else [0.0] * time_series.total_steps
+        arbitrage_export_curve: List[float] = battery_result.arbitrage_export_power_w if context.battery is not None else [0.0] * time_series.total_steps
+
         return OptimizationScheduleResponse(
             status="optimized",
             execution_time_ms=round(elapsed_ms, 2),
@@ -145,6 +148,8 @@ class OptimizationEngine:
             battery_soc_percent=battery_soc_curve,
             grid_import_power_w=grid_import_curve,
             grid_export_power_w=grid_export_curve,
+            grid_precharge_power_w=grid_precharge_curve,
+            arbitrage_export_power_w=arbitrage_export_curve,
             summary=summary_response,
             metadata={
                 "total_deferrable_energy_kwh": round(total_deferrable_kwh, 3),

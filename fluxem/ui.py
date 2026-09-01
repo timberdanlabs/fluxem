@@ -538,11 +538,17 @@ HTML_TEMPLATE = """
 
                   <!-- Net Grid Flow -->
                   <td class="px-3.5 py-2 whitespace-nowrap">
-                    <template x-if="activeScheduleData.grid_import_power_w && activeScheduleData.grid_import_power_w[idx] > 10">
-                      <span class="text-rose-400 font-medium" x-text="'+' + Math.round(activeScheduleData.grid_import_power_w[idx]) + ' W (Import)'"></span>
+                    <template x-if="activeScheduleData.grid_precharge_power_w && activeScheduleData.grid_precharge_power_w[idx] > 10">
+                      <span class="text-amber-400 font-semibold" x-text="'+' + Math.round(activeScheduleData.grid_import_power_w[idx]) + ' W (Pre-Charge)'"></span>
                     </template>
-                    <template x-if="activeScheduleData.grid_export_power_w && activeScheduleData.grid_export_power_w[idx] > 10">
-                      <span class="text-emerald-400 font-medium" x-text="'-' + Math.round(activeScheduleData.grid_export_power_w[idx]) + ' W (Export)'"></span>
+                    <template x-if="(!activeScheduleData.grid_precharge_power_w || activeScheduleData.grid_precharge_power_w[idx] <= 10) && (activeScheduleData.grid_import_power_w && activeScheduleData.grid_import_power_w[idx] > 10)">
+                      <span class="text-rose-400 font-medium" x-text="'+' + Math.round(activeScheduleData.grid_import_power_w[idx]) + ' W (Home Import)'"></span>
+                    </template>
+                    <template x-if="activeScheduleData.arbitrage_export_power_w && activeScheduleData.arbitrage_export_power_w[idx] > 10">
+                      <span class="text-cyan-400 font-semibold" x-text="'-' + Math.round(activeScheduleData.grid_export_power_w[idx]) + ' W (Arb Export)'"></span>
+                    </template>
+                    <template x-if="(!activeScheduleData.arbitrage_export_power_w || activeScheduleData.arbitrage_export_power_w[idx] <= 10) && (activeScheduleData.grid_export_power_w && activeScheduleData.grid_export_power_w[idx] > 10)">
+                      <span class="text-emerald-400 font-medium" x-text="'-' + Math.round(activeScheduleData.grid_export_power_w[idx]) + ' W (Solar Export)'"></span>
                     </template>
                     <template x-if="(!activeScheduleData.grid_import_power_w || activeScheduleData.grid_import_power_w[idx] <= 10) && (!activeScheduleData.grid_export_power_w || activeScheduleData.grid_export_power_w[idx] <= 10)">
                       <span class="text-slate-600">0 W</span>
